@@ -25,6 +25,21 @@ data/             Backup JSON para seed/import
 docker-compose.yml  Postgres + API + Web + Evolution
 ```
 
+## Dados iniciais (migration)
+
+A migration `apps/api/prisma/migrations/20261017000000_seed_dados_iniciais` carrega:
+
+- **319 produtos** do SEED do HTML
+- **22 causas** de direcionamento
+- **4 usuários** + configs do JSON
+- **402 reclamações** + **87 eventos** de auditoria do backup
+
+Para regenerar (com o JSON local em `data/`):
+
+```bash
+node scripts/generate-seed-migration.js
+```
+
 ## Desenvolvimento local
 
 ```bash
