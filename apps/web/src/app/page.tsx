@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { api, clearSession, getUser } from '@/lib/api';
+import { api, clearSession, getUser, uploadFile, uploadUrl } from '@/lib/api';
 
 type Tab = 'kpis' | 'lista' | 'alertas' | 'gestao' | 'dados';
 
@@ -103,6 +103,13 @@ type AuditoriaRow = {
   alvo?: string;
   detalhe?: string;
 };
+type Anexo = {
+  id: string;
+  nome: string;
+  path: string;
+  kb?: number;
+};
+type PendingAnexo = { key: string; file: File; preview?: string };
 
 const emptyForm = {
   data: '',
@@ -176,6 +183,9 @@ export default function HomePage() {
   const [novoUser, setNovoUser] = useState({ login: '', nome: '', senha: '', perfil: 'operador' });
   const [produtoQ, setProdutoQ] = useState('');
   const [produtoBusca, setProdutoBusca] = useState('');
+  const [anexos, setAnexos] = useState<Anexo[]>([]);
+  const [pendingFiles, setPendingFiles] = useState<PendingAnexo[]>([]);
+  const [anexoDrop, setAnexoDrop] = useState(false);
 
   const qs = useMemo(() => {
     const p = new URLSearchParams();
@@ -257,10 +267,78 @@ export default function HomePage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [modal]);
 
+  useEffect(() => {
+    if (!modal || !editId) return;
+    const ac = new AbortController();
+    const id = editId;
+    api<Anexo[]>(`/reclamacoes/${id}/anexos`, { signal: ac.signal })
+      .then((list) => {
+        if (!ac.signal.aborted) setAnexos(list);
+      })
+      .catch((e) => {
+        if (e?.name !== 'AbortError') setAnexos([]);
+      });
+    return () => ac.abort();
+  }, [modal, editId]);
+
+  useEffect(() => {
+    if (modal) return;
+    clearPendingFiles();
+  }, [modal]);
+
+  function isImageName(name: string) {
+    return /\.(jpe?g|png|gif|webp|bmp)$/i.test(name);
+  }
+
+  function clearPendingFiles() {
+    setPendingFiles((prev) => {
+      for (const p of prev) {
+        if (p.preview) URL.revokeObjectURL(p.preview);
+      }
+      return [];
+    });
+  }
+
+  function addPendingFiles(files: FileList | File[] | null) {
+    if (!files?.length) return;
+    const next: PendingAnexo[] = Array.from(files).map((file) => ({
+      key: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2, 8)}`,
+      file,
+      preview: isImageName(file.name) ? URL.createObjectURL(file) : undefined,
+    }));
+    setPendingFiles((prev) => [...prev, ...next]);
+  }
+
+  function removePending(key: string) {
+    setPendingFiles((prev) => {
+      const target = prev.find((p) => p.key === key);
+      if (target?.preview) URL.revokeObjectURL(target.preview);
+      return prev.filter((p) => p.key !== key);
+    });
+  }
+
+  async function uploadPendentes(reclamacaoId: string) {
+    const queue = [...pendingFiles];
+    for (const item of queue) {
+      await uploadFile(`/reclamacoes/${reclamacaoId}/anexos`, item.file);
+      removePending(item.key);
+    }
+    const list = await api<Anexo[]>(`/reclamacoes/${reclamacaoId}/anexos`);
+    setAnexos(list);
+  }
+
+  async function removerAnexo(anexoId: string) {
+    if (!editId) return;
+    await api(`/reclamacoes/${editId}/anexos/${anexoId}`, { method: 'DELETE' });
+    setAnexos((a) => a.filter((x) => x.id !== anexoId));
+  }
+
   function openNew() {
     setEditId(null);
     setForm({ ...emptyForm, data: new Date().toISOString().slice(0, 10) });
     setSugestao(null);
+    setAnexos([]);
+    clearPendingFiles();
     setModal(true);
   }
 
@@ -301,6 +379,8 @@ export default function HomePage() {
       rascunho: !!r.rascunho,
     });
     setSugestao(null);
+    clearPendingFiles();
+    setAnexos([]);
     setModal(true);
   }
 
@@ -369,11 +449,23 @@ export default function HomePage() {
       guia: Number(form.guia) || 0,
       rascunho: false,
     };
-    if (editId) await api(`/reclamacoes/${editId}`, { method: 'PATCH', json: payload });
-    else await api('/reclamacoes', { method: 'POST', json: payload });
-    setModal(false);
-    setMsg('Salvo.');
-    await refresh();
+    try {
+      let id = editId;
+      const hadPending = pendingFiles.length > 0;
+      if (editId) {
+        await api(`/reclamacoes/${editId}`, { method: 'PATCH', json: payload });
+      } else {
+        const created = await api<{ id: string }>('/reclamacoes', { method: 'POST', json: payload });
+        id = created.id;
+        setEditId(created.id);
+      }
+      if (id && hadPending) await uploadPendentes(id);
+      setModal(false);
+      setMsg(hadPending ? 'Salvo com anexos.' : 'Salvo.');
+      await refresh();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Erro ao salvar');
+    }
   }
 
   async function receber(id: string) {
@@ -866,6 +958,7 @@ export default function HomePage() {
               <>
                 <div className="tools">
                   <input
+                    aria-label="Buscar produtos"
                     placeholder="Buscar código, produto ou família…"
                     value={produtoQ}
                     onChange={(e) => setProdutoQ(e.target.value)}
@@ -995,8 +1088,16 @@ export default function HomePage() {
 
       {modal ? (
         <div className="modal-bg" onClick={() => setModal(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="dhead">{editId ? 'Editar reclamação' : 'Nova reclamação'}</div>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reclamacao-dialog-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="dhead" id="reclamacao-dialog-title">
+              {editId ? 'Editar reclamação' : 'Nova reclamação'}
+            </div>
             <div className="dbody">
               <div className="fgrid">
                 <div className="field">
@@ -1153,6 +1254,82 @@ export default function HomePage() {
                     <input type="number" step="0.01" value={form[k]} onChange={(e) => setF(k, e.target.value)} />
                   </div>
                 ))}
+                <div className="secao">Anexos (fotos e documentos)</div>
+                <div
+                  className={`anexos-drop${anexoDrop ? ' over' : ''}`}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setAnexoDrop(true);
+                  }}
+                  onDragLeave={() => setAnexoDrop(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setAnexoDrop(false);
+                    addPendingFiles(e.dataTransfer.files);
+                  }}
+                >
+                  <div className="anexos-bar">
+                    <label style={{ cursor: 'pointer', margin: 0 }}>
+                      <span className="small" style={{
+                        display: 'inline-block',
+                        padding: '3px 9px',
+                        fontSize: 13,
+                        border: '1px solid var(--line)',
+                        borderRadius: 5,
+                        background: '#fff',
+                      }}>
+                        Escolher arquivos
+                      </span>
+                      <input
+                        type="file"
+                        multiple
+                        accept=".jpg,.jpeg,.png,.gif,.webp,.bmp,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv"
+                        style={{ display: 'none' }}
+                        onChange={(e) => {
+                          addPendingFiles(e.target.files);
+                          e.target.value = '';
+                        }}
+                      />
+                    </label>
+                    <span className="help" style={{ margin: 0 }}>
+                      Arraste imagens ou docs aqui · máx. 15 MB · salvos ao clicar em Salvar
+                    </span>
+                  </div>
+                  <div className="anexos-lista">
+                    {anexos.map((a) => (
+                      <div key={a.id} className="anexo-card">
+                        {isImageName(a.nome) || isImageName(a.path) ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={uploadUrl(a.path)} alt={a.nome} />
+                        ) : (
+                          <div className="doc">{(a.nome.split('.').pop() || 'DOC').toUpperCase()}</div>
+                        )}
+                        <span className="nm" title={a.nome}>
+                          {a.nome}
+                        </span>
+                        <button type="button" className="fx" title="Remover" onClick={() => void removerAnexo(a.id)}>
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                    {pendingFiles.map((p) => (
+                      <div key={p.key} className="anexo-card">
+                        {p.preview ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={p.preview} alt={p.file.name} />
+                        ) : (
+                          <div className="doc">{(p.file.name.split('.').pop() || 'DOC').toUpperCase()}</div>
+                        )}
+                        <span className="nm" title={p.file.name}>
+                          {p.file.name} (novo)
+                        </span>
+                        <button type="button" className="fx" title="Remover" onClick={() => removePending(p.key)}>
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
             <div className="dfoot">

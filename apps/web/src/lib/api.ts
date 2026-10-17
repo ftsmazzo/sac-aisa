@@ -56,4 +56,28 @@ export async function api<T = unknown>(
   return res.json();
 }
 
+export async function uploadFile<T = unknown>(path: string, file: File): Promise<T> {
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const body = new FormData();
+  body.append('file', file);
+  const res = await fetch(`${API}${path}`, { method: 'POST', headers, body });
+  if (res.status === 401 && typeof window !== 'undefined') {
+    clearSession();
+    window.location.href = '/login';
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: res.statusText }));
+    throw new Error(err.message || `Erro ${res.status}`);
+  }
+  return res.json();
+}
+
+export function uploadUrl(relativePath: string) {
+  if (!relativePath) return '';
+  if (relativePath.startsWith('http')) return relativePath;
+  return `${API}/uploads/${relativePath.replace(/^\/+/, '')}`;
+}
+
 export { API };
