@@ -1075,10 +1075,16 @@ export default function HomePage() {
                 </h3>
                 <p>{a.mensagem}</p>
                 <div className="tools">
-                  <button className="small" onClick={() => api(`/alertas/${a.id}/resolver`, { method: 'POST' }).then(refresh)}>
+                  <button
+                    className="small"
+                    onClick={() => api(`/alertas/${a.id}/resolver`, { method: 'POST' }).then(() => refresh())}
+                  >
                     Resolver
                   </button>
-                  <button className="small" onClick={() => api(`/alertas/${a.id}/ignorar`, { method: 'POST' }).then(refresh)}>
+                  <button
+                    className="small"
+                    onClick={() => api(`/alertas/${a.id}/ignorar`, { method: 'POST' }).then(() => refresh())}
+                  >
                     Ignorar
                   </button>
                 </div>
