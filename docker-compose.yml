@@ -1,0 +1,90 @@
+# Stack para EasyPanel / local
+# - Postgres: serviço de banco
+# - api / web: aplicação SAC
+# - evolution: Evolution API (WhatsApp) — criar instância "sac-aisa" e apontar webhook
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sac
+      POSTGRES_PASSWORD: sac_secret
+      POSTGRES_DB: sac_aisa
+    volumes:
+      - sac_pg:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sac -d sac_aisa"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://sac:sac_secret@postgres:5432/sac_aisa?schema=public
+      API_PORT: 3001
+      JWT_SECRET: ${JWT_SECRET:-troque-este-segredo}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+      UPLOAD_DIR: /app/uploads
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:3001}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      EVOLUTION_API_URL: ${EVOLUTION_API_URL:-http://evolution:8080}
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-}
+      EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE:-sac-aisa}
+      EVOLUTION_WEBHOOK_SECRET: ${EVOLUTION_WEBHOOK_SECRET:-}
+      ALERT_AGUARDANDO_DIAS: ${ALERT_AGUARDANDO_DIAS:-7}
+      ALERT_META_DIAS: ${ALERT_META_DIAS:-2}
+      ALERT_CUSTO_ALTO: ${ALERT_CUSTO_ALTO:-500}
+    volumes:
+      - sac_uploads:/app/uploads
+      - ./data:/app/data:ro
+    ports:
+      - "3001:3001"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
+    ports:
+      - "3000:3000"
+
+  evolution:
+    image: atendai/evolution-api:v2.2.3
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SERVER_URL: ${EVOLUTION_SERVER_URL:-http://localhost:8080}
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:-troque-a-chave-da-evolution}
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://sac:sac_secret@postgres:5432/evolution?schema=public
+      DATABASE_CONNECTION_CLIENT_NAME: evolution
+      LOG_LEVEL: ERROR,WARN,INFO
+    ports:
+      - "8080:8080"
+    volumes:
+      - sac_evolution:/evolution/instances
+
+volumes:
+  sac_pg:
+  sac_uploads:
+  sac_evolution:

@@ -1,0 +1,274 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Perfil {
+  master
+  gestor
+  operador
+}
+
+enum Devolucao {
+  NA
+  AGUARDANDO
+  RECEBIDO
+}
+
+enum Situacao {
+  aguardando
+  tratativa
+  resolvida
+}
+
+enum ProdutoStatus {
+  ATIVO
+  INATIVO
+}
+
+enum AlertTipo {
+  AGUARDANDO_DIAS
+  TRATATIVA_META
+  RECORRENCIA
+  CUSTO_ALTO
+  CAUSA_OUTROS
+  RASCUNHO_WHATSAPP
+}
+
+enum AlertStatus {
+  aberto
+  enviado
+  resolvido
+  ignorado
+}
+
+enum WhatsappDirecao {
+  inbound
+  outbound
+}
+
+enum WhatsappPapel {
+  cliente
+  interno
+}
+
+model Usuario {
+  id        String   @id @default(cuid())
+  login     String   @unique
+  nome      String
+  perfil    Perfil
+  salt      String
+  hash      String
+  ativo     Boolean  @default(true)
+  telefone  String?
+  criadoEm  DateTime @default(now())
+  criadoPor String?
+  alteradoEm DateTime @updatedAt
+
+  @@map("usuarios")
+}
+
+model Produto {
+  id        String        @id @default(cuid())
+  cod       String        @unique
+  produto   String
+  setor     String        @default("")
+  status    ProdutoStatus @default(ATIVO)
+  categoria String        @default("")
+  familia   String        @default("")
+  criadoEm  DateTime      @default(now())
+  alteradoEm DateTime     @updatedAt
+
+  @@map("produtos")
+}
+
+model SkuDepara {
+  id        String   @id @default(cuid())
+  skuOrigem String   @unique
+  skuDestino String
+  criadoEm  DateTime @default(now())
+
+  @@map("sku_depara")
+}
+
+model Causa {
+  id     String @id
+  cat    String
+  nome   String
+  setor  String
+  acao   String
+  ordem  Int    @default(0)
+
+  @@map("causas")
+}
+
+model RegraDirecionamento {
+  id      String @id @default(cuid())
+  causaId String @unique
+  setor   String?
+  acao    String?
+
+  @@map("regras_direcionamento")
+}
+
+model Reclamacao {
+  id               String     @id @default(cuid())
+  reg              Int        @unique
+  data             String?
+  empresa          String     @default("")
+  setor            String     @default("")
+  sku              String     @default("")
+  produto          String     @default("")
+  familia          String     @default("")
+  garantia         String     @default("")
+  canal            String     @default("")
+  protocolo        String     @default("")
+  cliente          String     @default("")
+  cidade           String     @default("")
+  uf               String     @default("")
+  reclamacao       String     @default("")
+  laudo            String     @default("")
+  procedencia      String     @default("")
+  solucao          String     @default("")
+  dataAcao         String?
+  obs              String     @default("")
+  transp           String     @default("")
+  freteEnvio       Float      @default(0)
+  freteRetorno     Float      @default(0)
+  valorPeca        Float      @default(0)
+  estorno          Float      @default(0)
+  desconto         Float      @default(0)
+  guia             Float      @default(0)
+  devolucao        Devolucao  @default(NA)
+  dataRecebimento  String?
+  causaId          String     @default("")
+  causaManual      Boolean    @default(false)
+  obsCausa         String     @default("")
+  setorRespManual  String     @default("")
+  peca             String     @default("")
+  situacao         Situacao   @default(tratativa)
+  origem           String     @default("web")
+  whatsappTelefone String?
+  rascunho         Boolean    @default(false)
+  criadoEm         DateTime   @default(now())
+  criadoPor        String?
+  alteradoEm       DateTime   @updatedAt
+  alteradoPor      String?
+
+  fotos   ReclamacaoFoto[]
+  alertas Alerta[]
+
+  @@index([situacao])
+  @@index([data])
+  @@index([empresa])
+  @@index([canal])
+  @@map("reclamacoes")
+}
+
+model ReclamacaoFoto {
+  id            String   @id @default(cuid())
+  reclamacaoId  String
+  nome          String
+  path          String
+  miniPath      String?
+  width         Int?
+  height        Int?
+  kb            Int?
+  descricaoIa   String?
+  criadoEm      DateTime @default(now())
+  criadoPor     String?
+
+  reclamacao Reclamacao @relation(fields: [reclamacaoId], references: [id], onDelete: Cascade)
+
+  @@map("reclamacao_fotos")
+}
+
+model Auditoria {
+  id      String   @id @default(cuid())
+  ts      DateTime @default(now())
+  user    String
+  nome    String   @default("")
+  perfil  String   @default("")
+  acao    String
+  alvo    String   @default("")
+  detalhe String   @default("")
+  recId   String?
+  extra   Json?
+
+  @@index([ts])
+  @@index([recId])
+  @@map("auditoria")
+}
+
+model Config {
+  chave String @id
+  valor String
+
+  @@map("config")
+}
+
+model Alerta {
+  id           String      @id @default(cuid())
+  tipo         AlertTipo
+  status       AlertStatus @default(aberto)
+  titulo       String
+  mensagem     String
+  reclamacaoId String?
+  chaveDedupe  String
+  setorResp    String?
+  enviadoEm    DateTime?
+  resolvidoEm  DateTime?
+  criadoEm     DateTime    @default(now())
+  meta         Json?
+
+  reclamacao Reclamacao? @relation(fields: [reclamacaoId], references: [id], onDelete: SetNull)
+
+  @@unique([chaveDedupe])
+  @@index([status, tipo])
+  @@map("alertas")
+}
+
+model AlertaDestino {
+  id      String @id @default(cuid())
+  setor   String @default("")
+  perfil  String @default("")
+  telefone String
+  ativo   Boolean @default(true)
+  nome    String  @default("")
+
+  @@map("alerta_destinos")
+}
+
+model WhatsappConversa {
+  id        String        @id @default(cuid())
+  telefone  String
+  papel     WhatsappPapel @default(cliente)
+  nome      String        @default("")
+  estado    String        @default("inicio")
+  contexto  Json?
+  ativo     Boolean       @default(true)
+  criadoEm  DateTime      @default(now())
+  alteradoEm DateTime     @updatedAt
+
+  mensagens WhatsappMensagem[]
+
+  @@index([telefone])
+  @@map("whatsapp_conversas")
+}
+
+model WhatsappMensagem {
+  id         String           @id @default(cuid())
+  conversaId String
+  direcao    WhatsappDirecao
+  texto      String
+  payload    Json?
+  criadoEm   DateTime         @default(now())
+
+  conversa WhatsappConversa @relation(fields: [conversaId], references: [id], onDelete: Cascade)
+
+  @@map("whatsapp_mensagens")
+}

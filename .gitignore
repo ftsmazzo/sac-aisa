@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.next/
+.env
+uploads/*
+!uploads/.gitkeep
+*.log
+.DS_Store
+apps/api/prisma/*.db
+coverage/
+**/*.tsbuildinfo
+
+# Customer backups - keep out of public repo
+/data/*.json
+!/data/.gitkeep
+sac_backup*.json
+*sac_backup*.json
+1792175715984_sac_backup_ultimo.json
