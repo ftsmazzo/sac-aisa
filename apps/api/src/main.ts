@@ -4,6 +4,7 @@ import { resolve, join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
 
 config({ path: resolve(process.cwd(), '../../.env') });
@@ -13,7 +14,12 @@ async function bootstrap() {
   const uploadDir = process.env.UPLOAD_DIR || join(process.cwd(), 'uploads');
   if (!existsSync(uploadDir)) mkdirSync(uploadDir, { recursive: true });
 
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // Import anual de vendas (~400KB+) estoura o default 100kb do body-parser
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    bodyParser: false,
+  });
+  app.use(json({ limit: '20mb' }));
+  app.use(urlencoded({ extended: true, limit: '20mb' }));
   app.enableCors({
     origin: (process.env.CORS_ORIGIN || 'http://localhost:3000').split(','),
     credentials: true,
