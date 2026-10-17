@@ -161,7 +161,15 @@ export default function HomePage() {
   const [editId, setEditId] = useState<string | null>(null);
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState(emptyForm);
-  const [sugestao, setSugestao] = useState('');
+  const [sugestao, setSugestao] = useState<{
+    causaNome: string;
+    setor: string;
+    peca: string;
+    confianca: number;
+    fonte: string;
+    explicacao?: string;
+    acao?: string;
+  } | null>(null);
   const [msg, setMsg] = useState('');
   const [gestaoSub, setGestaoSub] = useState<'usuarios' | 'regras' | 'produtos' | 'auditoria'>('usuarios');
   const [gestaoData, setGestaoData] = useState<unknown[]>([]);
@@ -211,11 +219,11 @@ export default function HomePage() {
         : gestaoSub === 'regras'
           ? '/gestao/regras'
           : gestaoSub === 'produtos'
-            ? `/gestao/produtos${produtoQ ? `?q=${encodeURIComponent(produtoQ)}` : ''}`
+            ? `/gestao/produtos${produtoBusca ? `?q=${encodeURIComponent(produtoBusca)}` : ''}`
             : '/gestao/auditoria?limit=100';
     const data = await api<unknown[]>(path);
     setGestaoData(data);
-  }, [tab, gestaoSub, produtoQ]);
+  }, [tab, gestaoSub, produtoBusca]);
 
   useEffect(() => {
     loadGestao().catch((e) => setMsg(e.message));
@@ -224,7 +232,7 @@ export default function HomePage() {
   function openNew() {
     setEditId(null);
     setForm({ ...emptyForm, data: new Date().toISOString().slice(0, 10) });
-    setSugestao('');
+    setSugestao(null);
     setModal(true);
   }
 
@@ -264,11 +272,15 @@ export default function HomePage() {
       peca: r.peca || '',
       rascunho: !!r.rascunho,
     });
-    setSugestao('');
+    setSugestao(null);
     setModal(true);
   }
 
   async function classificarIa() {
+    if (!form.reclamacao && !form.laudo && !form.solucao) {
+      setMsg('Preencha reclamação, laudo ou solução antes de pedir a sugestão.');
+      return;
+    }
     const s = await api<{
       causaId: string;
       causaNome: string;
@@ -277,6 +289,7 @@ export default function HomePage() {
       confianca: number;
       fonte: string;
       explicacao?: string;
+      acao?: string;
       laudoSugerido?: string;
     }>('/ia/classificar', {
       method: 'POST',
@@ -295,9 +308,25 @@ export default function HomePage() {
       peca: s.peca || f.peca,
       laudo: f.laudo || s.laudoSugerido || '',
     }));
-    setSugestao(
-      `${s.causaNome} → ${s.setor} · peça: ${s.peca || '—'} · ${Math.round(s.confianca * 100)}% (${s.fonte}) ${s.explicacao || ''}`,
-    );
+    setSugestao({
+      causaNome: s.causaNome,
+      setor: s.setor,
+      peca: s.peca || '',
+      confianca: s.confianca,
+      fonte: s.fonte,
+      explicacao: s.explicacao,
+      acao: s.acao,
+    });
+  }
+
+  function nomeCausa(id: string) {
+    return causas.find((c) => c.id === id)?.nome || id;
+  }
+
+  function fonteLabel(fonte: string) {
+    if (fonte === 'llm') return 'ChatGPT';
+    if (fonte === 'manual') return 'Escolha manual';
+    return 'Regras do SAC';
   }
 
   async function salvar() {
@@ -415,11 +444,64 @@ export default function HomePage() {
 
         {tab === 'kpis' && kpis ? (
           <>
-            <div className="kpis">
-              <div className="kpi">
-                <span>Reclamações</span>
-                <b>{kpis.totais.n}</b>
+            <div className="kpi-hero">
+              <div className="kpi-panel">
+                <h3>Situação no período</h3>
+                <div className="kpi-big">{kpis.totais.n}</div>
+                <div className="kpi-big-label">reclamações filtradas</div>
+                {(() => {
+                  const tot = Math.max(kpis.totais.n, 1);
+                  const pctA = (kpis.totais.aguardando / tot) * 100;
+                  const pctT = (kpis.totais.tratativa / tot) * 100;
+                  const pctR = (kpis.totais.resolvida / tot) * 100;
+                  return (
+                    <>
+                      <div className="kpi-stack" aria-hidden>
+                        <i className="s-aguard" style={{ width: `${pctA}%` }} />
+                        <i className="s-trat" style={{ width: `${pctT}%` }} />
+                        <i className="s-ok" style={{ width: `${pctR}%` }} />
+                      </div>
+                      <div className="kpi-legend">
+                        <span>
+                          Aguardando <b>{kpis.totais.aguardando}</b>
+                        </span>
+                        <span>
+                          Tratativa <b>{kpis.totais.tratativa}</b>
+                        </span>
+                        <span>
+                          Resolvidas <b>{kpis.totais.resolvida}</b>
+                        </span>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
+              <div className="kpi-panel">
+                <div className="kpi-metric">
+                  <h3>Custo total</h3>
+                  <div className="kpi-big" style={{ fontSize: 26 }}>
+                    {brl(kpis.totais.custo)}
+                  </div>
+                  <div className="kpi-big-label">
+                    tempo médio {kpis.totais.tempoMedio == null ? '—' : `${kpis.totais.tempoMedio.toFixed(1)} dias`}
+                  </div>
+                </div>
+              </div>
+              <div className="kpi-panel">
+                <div className="kpi-metric">
+                  <h3>Na meta (≤{kpis.totais.metaDias}d)</h3>
+                  <div className="kpi-big">{kpis.totais.pctMeta == null ? '—' : `${kpis.totais.pctMeta}%`}</div>
+                  <div
+                    className={`kpi-meter ${kpis.totais.pctMeta != null && kpis.totais.pctMeta < 70 ? 'warn' : ''}`}
+                  >
+                    <i style={{ width: `${Math.min(100, kpis.totais.pctMeta || 0)}%` }} />
+                  </div>
+                  <div className="kpi-big-label">{kpis.totais.pctRecorrentes}% com causa recorrente no SKU</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="kpis">
               <div className={`kpi ${kpis.totais.aguardando ? 'alerta' : ''}`}>
                 <span>Aguardando produto</span>
                 <b>{kpis.totais.aguardando}</b>
@@ -433,49 +515,62 @@ export default function HomePage() {
                 <b>{kpis.totais.resolvida}</b>
               </div>
               <div className="kpi">
-                <span>Custo total</span>
-                <b>{brl(kpis.totais.custo)}</b>
-              </div>
-              <div className="kpi">
-                <span>Tempo médio</span>
-                <b>{kpis.totais.tempoMedio == null ? '—' : `${kpis.totais.tempoMedio.toFixed(1)} d`}</b>
-              </div>
-              <div className="kpi">
-                <span>Na meta (≤{kpis.totais.metaDias}d)</span>
-                <b>{kpis.totais.pctMeta == null ? '—' : `${kpis.totais.pctMeta}%`}</b>
-              </div>
-              <div className="kpi">
                 <span>Recorrentes</span>
                 <b>{kpis.totais.pctRecorrentes}%</b>
               </div>
             </div>
+
             <div className="grid2">
               <div className="card">
                 <h3>Para onde direcionar</h3>
-                {kpis.direcionamento.slice(0, 10).map((g) => (
-                  <div key={g.k} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-                    <span>{g.k}</span>
-                    <span className="muted">
-                      {g.n} · {brl(g.custo)}
-                    </span>
-                  </div>
-                ))}
+                <p className="muted" style={{ margin: '0 0 12px', fontSize: 12 }}>
+                  Volume de reclamações por setor responsável (causa → setor).
+                </p>
+                <div className="bar-list">
+                  {kpis.direcionamento.slice(0, 10).map((g) => {
+                    const max = kpis.direcionamento[0]?.n || 1;
+                    return (
+                      <div className="bar-row" key={g.k}>
+                        <div className="name" title={g.k}>
+                          {g.k}
+                        </div>
+                        <div className="bar-track">
+                          <i style={{ width: `${Math.max(4, (g.n / max) * 100)}%` }} />
+                        </div>
+                        <div className="bar-meta">
+                          {g.n} · {brl(g.custo)}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
               <div className="card">
                 <h3>Problemas que se repetem</h3>
+                <p className="muted" style={{ margin: '0 0 12px', fontSize: 12 }}>
+                  Mesmo SKU + mesma causa, mais de uma vez no período.
+                </p>
                 {!kpis.recorrencias.length ? (
                   <p className="muted">Nenhuma repetição no período.</p>
                 ) : (
-                  kpis.recorrencias.slice(0, 10).map((g) => (
-                    <div key={`${g.cod}-${g.causaId}`} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-                      <span>
-                        {g.cod} / {g.causaId}
-                      </span>
-                      <span className="muted">
-                        {g.n} · {brl(g.custo)}
-                      </span>
-                    </div>
-                  ))
+                  <div className="bar-list">
+                    {kpis.recorrencias.slice(0, 10).map((g) => {
+                      const max = kpis.recorrencias[0]?.n || 1;
+                      return (
+                        <div className="bar-row" key={`${g.cod}-${g.causaId}`}>
+                          <div className="name" title={`${g.cod} — ${nomeCausa(g.causaId)}`}>
+                            <b>{g.cod}</b> · {nomeCausa(g.causaId)}
+                          </div>
+                          <div className="bar-track cost">
+                            <i style={{ width: `${Math.max(4, (g.n / max) * 100)}%` }} />
+                          </div>
+                          <div className="bar-meta">
+                            {g.n}× · {brl(g.custo)}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 )}
               </div>
             </div>
@@ -745,8 +840,14 @@ export default function HomePage() {
                     placeholder="Buscar código, produto ou família…"
                     value={produtoQ}
                     onChange={(e) => setProdutoQ(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') setProdutoBusca(produtoQ.trim());
+                    }}
                     style={{ minWidth: 280 }}
                   />
+                  <button className="small" onClick={() => setProdutoBusca(produtoQ.trim())}>
+                    Buscar
+                  </button>
                   <span className="muted">{(gestaoData as ProdutoRow[]).length} produtos</span>
                 </div>
                 <div className="tablewrap">
@@ -946,7 +1047,55 @@ export default function HomePage() {
                   <label>Data da ação</label>
                   <input type="date" value={form.dataAcao} onChange={(e) => setF('dataAcao', e.target.value)} />
                 </div>
-                <div className="secao">Direcionamento / IA</div>
+                <div className="secao">Direcionamento</div>
+                <div className="sugestao-box">
+                  <h4>Sugestão de causa e setor</h4>
+                  <p className="help">
+                    Lê o texto da <b>reclamação</b>, <b>laudo</b> e <b>solução</b> e sugere a causa + setor
+                    responsável. Sem chave LLM, usa só as <b>regras do SAC</b> (palavras-chave). Com
+                    OpenRouter/OpenAI, a LLM pode reforçar ou confirmar a sugestão. Você sempre pode
+                    trocar a causa manualmente.
+                  </p>
+                  {sugestao ? (
+                    <>
+                      <div className="sugestao-grid">
+                        <div className="cell">
+                          <span>Causa</span>
+                          <b>{sugestao.causaNome}</b>
+                        </div>
+                        <div className="cell">
+                          <span>Setor responsável</span>
+                          <b>{sugestao.setor}</b>
+                        </div>
+                        <div className="cell">
+                          <span>Peça detectada</span>
+                          <b>{sugestao.peca || '—'}</b>
+                        </div>
+                        <div className="cell">
+                          <span>Fonte · confiança</span>
+                          <b>
+                            {fonteLabel(sugestao.fonte)} · {Math.round(sugestao.confianca * 100)}%
+                          </b>
+                        </div>
+                      </div>
+                      {sugestao.acao || sugestao.explicacao ? (
+                        <p className="why">
+                          {sugestao.acao ? (
+                            <>
+                              <b>Ação sugerida:</b> {sugestao.acao}
+                              <br />
+                            </>
+                          ) : null}
+                          {sugestao.explicacao || null}
+                        </p>
+                      ) : null}
+                    </>
+                  ) : (
+                    <p className="help" style={{ marginBottom: 0 }}>
+                      Clique em <b>Sugerir causa e setor</b> depois de preencher o texto.
+                    </p>
+                  )}
+                </div>
                 <div className="field s2">
                   <label>Causa</label>
                   <select
@@ -968,7 +1117,6 @@ export default function HomePage() {
                   <label>Peça</label>
                   <input value={form.peca} onChange={(e) => setF('peca', e.target.value)} />
                 </div>
-                <div className="hint ok">{sugestao}</div>
                 <div className="secao">Custos (R$)</div>
                 {(['freteEnvio', 'freteRetorno', 'valorPeca', 'estorno', 'desconto', 'guia'] as const).map((k) => (
                   <div className="field" key={k}>
@@ -979,7 +1127,7 @@ export default function HomePage() {
               </div>
             </div>
             <div className="dfoot">
-              <button onClick={classificarIa}>Sugerir com IA</button>
+              <button onClick={classificarIa}>Sugerir causa e setor</button>
               <button onClick={() => setModal(false)}>Cancelar</button>
               <button className="primary" onClick={salvar}>
                 Salvar

@@ -21,9 +21,49 @@ export interface ClassificacaoResult {
   explicacao?: string;
 }
 
+type LlmProvider = {
+  key: string;
+  baseUrl: string;
+  model: string;
+  headers: Record<string, string>;
+  nome: string;
+};
+
 @Injectable()
 export class IaService {
   private readonly log = new Logger(IaService.name);
+
+  private resolveProvider(): LlmProvider | null {
+    const openrouter = process.env.OPENROUTER_API_KEY?.trim();
+    if (openrouter) {
+      return {
+        key: openrouter,
+        baseUrl: 'https://openrouter.ai/api/v1/chat/completions',
+        model: process.env.OPENROUTER_MODEL || process.env.OPENAI_MODEL || 'openai/gpt-4o-mini',
+        nome: 'OpenRouter',
+        headers: {
+          Authorization: `Bearer ${openrouter}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': process.env.PUBLIC_API_URL || 'https://sac-aisa.local',
+          'X-Title': 'SAC AISA',
+        },
+      };
+    }
+    const openai = process.env.OPENAI_API_KEY?.trim();
+    if (openai) {
+      return {
+        key: openai,
+        baseUrl: 'https://api.openai.com/v1/chat/completions',
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        nome: 'OpenAI',
+        headers: {
+          Authorization: `Bearer ${openai}`,
+          'Content-Type': 'application/json',
+        },
+      };
+    }
+    return null;
+  }
 
   classificarLegado(r: ReclamacaoLike): ClassificacaoResult {
     const causaId = r.causaManual && r.causaId ? r.causaId : classificar(r);
@@ -37,7 +77,8 @@ export class IaService {
       peca,
       confianca: causa.id === 'outros' ? 0.35 : 0.78,
       fonte: 'legado',
-      explicacao: 'Classificador operacional legado (regras do SAC atual).',
+      explicacao:
+        'Sugestão pelas regras do SAC (palavras-chave no laudo/reclamação/solução). Sem chave LLM configurada, só este modo roda.',
     };
   }
 
@@ -57,32 +98,43 @@ export class IaService {
     }
 
     const legado = this.classificarLegado(r);
-    const key = process.env.OPENAI_API_KEY;
-    if (!key) return legado;
+    const provider = this.resolveProvider();
+    if (!provider) return legado;
 
     try {
-      const llm = await this.classificarLlm(r);
+      const llm = await this.classificarLlm(r, provider);
       if (!llm || llm.confianca < 0.55) {
-        return { ...legado, explicacao: `${legado.explicacao} LLM abaixo do limiar; mantido legado.` };
+        return {
+          ...legado,
+          explicacao: `${legado.explicacao} ${provider.nome} abaixo do limiar; mantido regras do SAC.`,
+        };
       }
-      // se LLM discorda muito e legado não é outros, preferir legado com nota
       if (legado.causaId !== 'outros' && llm.causaId !== legado.causaId && llm.confianca < 0.8) {
         return {
           ...legado,
-          explicacao: `Legado sugeriu ${legado.causaId}; LLM sugeriu ${llm.causaId} com confiança ${llm.confianca}.`,
+          explicacao: `Regras sugeriram "${legado.causaNome}"; ${provider.nome} sugeriu "${llm.causaNome}" (${Math.round(llm.confianca * 100)}%). Mantido regras.`,
         };
       }
-      return llm;
+      return {
+        ...llm,
+        explicacao: llm.explicacao || `Classificado via ${provider.nome} (${provider.model}).`,
+      };
     } catch (e) {
-      this.log.warn(`LLM falhou: ${e}`);
-      return legado;
+      this.log.warn(`LLM falhou (${provider.nome}): ${e}`);
+      return {
+        ...legado,
+        explicacao: `${legado.explicacao} ${provider.nome} indisponível; mantido regras do SAC.`,
+      };
     }
   }
 
-  private async classificarLlm(r: ReclamacaoLike): Promise<ClassificacaoResult | null> {
+  private async classificarLlm(
+    r: ReclamacaoLike,
+    provider: LlmProvider,
+  ): Promise<ClassificacaoResult | null> {
     const catalogo = CAUSAS.map(({ t: _t, ...c }) => c);
     const prompt = {
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      model: provider.model,
       temperature: 0.1,
       response_format: { type: 'json_object' },
       messages: [
@@ -105,15 +157,12 @@ export class IaService {
       ],
     };
 
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    const res = await fetch(provider.baseUrl, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
+      headers: provider.headers,
       body: JSON.stringify(prompt),
     });
-    if (!res.ok) throw new Error(`OpenAI ${res.status}`);
+    if (!res.ok) throw new Error(`${provider.nome} ${res.status}`);
     const json = (await res.json()) as {
       choices?: { message?: { content?: string } }[];
     };
@@ -143,16 +192,13 @@ export class IaService {
   }
 
   async descreverFoto(base64: string, mime = 'image/jpeg'): Promise<string> {
-    const key = process.env.OPENAI_API_KEY;
-    if (!key) return 'Descrição de foto indisponível (OPENAI_API_KEY não configurada).';
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    const provider = this.resolveProvider();
+    if (!provider) return 'Descrição de foto indisponível (configure OPENROUTER_API_KEY ou OPENAI_API_KEY).';
+    const res = await fetch(provider.baseUrl, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${key}`,
-        'Content-Type': 'application/json',
-      },
+      headers: provider.headers,
       body: JSON.stringify({
-        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        model: provider.model,
         messages: [
           {
             role: 'user',
@@ -167,7 +213,7 @@ export class IaService {
         ],
       }),
     });
-    if (!res.ok) throw new Error(`OpenAI vision ${res.status}`);
+    if (!res.ok) throw new Error(`${provider.nome} vision ${res.status}`);
     const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
     return json.choices?.[0]?.message?.content || '';
   }
