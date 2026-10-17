@@ -208,26 +208,54 @@ export default function HomePage() {
     }
     setUser(u);
     api<Causa[]>('/gestao/causas').then(setCausas).catch(() => undefined);
-    refresh().catch((e) => setMsg(e.message));
-  }, [router, refresh]);
-
-  const loadGestao = useCallback(async () => {
-    if (tab !== 'gestao') return;
-    const path =
-      gestaoSub === 'usuarios'
-        ? '/gestao/usuarios'
-        : gestaoSub === 'regras'
-          ? '/gestao/regras'
-          : gestaoSub === 'produtos'
-            ? `/gestao/produtos${produtoBusca ? `?q=${encodeURIComponent(produtoBusca)}` : ''}`
-            : '/gestao/auditoria?limit=100';
-    const data = await api<unknown[]>(path);
-    setGestaoData(data);
-  }, [tab, gestaoSub, produtoBusca]);
+  }, [router]);
 
   useEffect(() => {
-    loadGestao().catch((e) => setMsg(e.message));
-  }, [loadGestao]);
+    if (!user) return;
+    let cancelled = false;
+    refresh()
+      .catch((e) => {
+        if (!cancelled) setMsg(e.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user, refresh]);
+
+  const loadGestao = useCallback(
+    async (signal?: AbortSignal) => {
+      if (tab !== 'gestao') return;
+      const path =
+        gestaoSub === 'usuarios'
+          ? '/gestao/usuarios'
+          : gestaoSub === 'regras'
+            ? '/gestao/regras'
+            : gestaoSub === 'produtos'
+              ? `/gestao/produtos${produtoBusca ? `?q=${encodeURIComponent(produtoBusca)}` : ''}`
+              : '/gestao/auditoria?limit=100';
+      const data = await api<unknown[]>(path, { signal });
+      if (!signal?.aborted) setGestaoData(data);
+    },
+    [tab, gestaoSub, produtoBusca],
+  );
+
+  useEffect(() => {
+    if (tab !== 'gestao') return;
+    const ac = new AbortController();
+    loadGestao(ac.signal).catch((e) => {
+      if (e?.name !== 'AbortError') setMsg(e.message);
+    });
+    return () => ac.abort();
+  }, [tab, loadGestao]);
+
+  useEffect(() => {
+    if (!modal) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setModal(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [modal]);
 
   function openNew() {
     setEditId(null);
@@ -501,25 +529,6 @@ export default function HomePage() {
               </div>
             </div>
 
-            <div className="kpis">
-              <div className={`kpi ${kpis.totais.aguardando ? 'alerta' : ''}`}>
-                <span>Aguardando produto</span>
-                <b>{kpis.totais.aguardando}</b>
-              </div>
-              <div className="kpi">
-                <span>Em tratativa</span>
-                <b>{kpis.totais.tratativa}</b>
-              </div>
-              <div className="kpi">
-                <span>Resolvidas</span>
-                <b>{kpis.totais.resolvida}</b>
-              </div>
-              <div className="kpi">
-                <span>Recorrentes</span>
-                <b>{kpis.totais.pctRecorrentes}%</b>
-              </div>
-            </div>
-
             <div className="grid2">
               <div className="card">
                 <h3>Para onde direcionar</h3>
@@ -556,10 +565,11 @@ export default function HomePage() {
                   <div className="bar-list">
                     {kpis.recorrencias.slice(0, 10).map((g) => {
                       const max = kpis.recorrencias[0]?.n || 1;
+                      const nome = nomeCausa(g.causaId);
                       return (
                         <div className="bar-row" key={`${g.cod}-${g.causaId}`}>
-                          <div className="name" title={`${g.cod} — ${nomeCausa(g.causaId)}`}>
-                            <b>{g.cod}</b> · {nomeCausa(g.causaId)}
+                          <div className="name" title={`${g.cod} — ${nome}`}>
+                            <b>{g.cod}</b> · {nome}
                           </div>
                           <div className="bar-track cost">
                             <i style={{ width: `${Math.max(4, (g.n / max) * 100)}%` }} />
@@ -715,43 +725,62 @@ export default function HomePage() {
                 {ehGestor ? (
                   <div className="card" style={{ marginBottom: 12 }}>
                     <h3>Novo usuário</h3>
-                    <div className="fgrid" style={{ marginBottom: 10 }}>
-                      <div className="field">
-                        <label>Login</label>
-                        <input value={novoUser.login} onChange={(e) => setNovoUser((u) => ({ ...u, login: e.target.value }))} />
-                      </div>
-                      <div className="field">
-                        <label>Nome</label>
-                        <input value={novoUser.nome} onChange={(e) => setNovoUser((u) => ({ ...u, nome: e.target.value }))} />
-                      </div>
-                      <div className="field">
-                        <label>Senha</label>
-                        <input
-                          type="password"
-                          value={novoUser.senha}
-                          onChange={(e) => setNovoUser((u) => ({ ...u, senha: e.target.value }))}
-                        />
-                      </div>
-                      <div className="field">
-                        <label>Perfil</label>
-                        <select value={novoUser.perfil} onChange={(e) => setNovoUser((u) => ({ ...u, perfil: e.target.value }))}>
-                          <option value="operador">Operador</option>
-                          <option value="gestor">Gestor</option>
-                          {user.perfil === 'master' ? <option value="master">Master</option> : null}
-                        </select>
-                      </div>
-                    </div>
-                    <button
-                      className="primary"
-                      onClick={async () => {
+                    <form
+                      onSubmit={async (e) => {
+                        e.preventDefault();
                         await api('/gestao/usuarios', { method: 'POST', json: novoUser });
                         setNovoUser({ login: '', nome: '', senha: '', perfil: 'operador' });
                         setMsg('Usuário criado.');
                         await loadGestao();
                       }}
                     >
-                      Criar usuário
-                    </button>
+                      <div className="fgrid" style={{ marginBottom: 10 }}>
+                        <div className="field">
+                          <label htmlFor="nu-login">Login</label>
+                          <input
+                            id="nu-login"
+                            required
+                            value={novoUser.login}
+                            onChange={(e) => setNovoUser((u) => ({ ...u, login: e.target.value }))}
+                          />
+                        </div>
+                        <div className="field">
+                          <label htmlFor="nu-nome">Nome</label>
+                          <input
+                            id="nu-nome"
+                            required
+                            value={novoUser.nome}
+                            onChange={(e) => setNovoUser((u) => ({ ...u, nome: e.target.value }))}
+                          />
+                        </div>
+                        <div className="field">
+                          <label htmlFor="nu-senha">Senha</label>
+                          <input
+                            id="nu-senha"
+                            type="password"
+                            required
+                            minLength={4}
+                            value={novoUser.senha}
+                            onChange={(e) => setNovoUser((u) => ({ ...u, senha: e.target.value }))}
+                          />
+                        </div>
+                        <div className="field">
+                          <label htmlFor="nu-perfil">Perfil</label>
+                          <select
+                            id="nu-perfil"
+                            value={novoUser.perfil}
+                            onChange={(e) => setNovoUser((u) => ({ ...u, perfil: e.target.value }))}
+                          >
+                            <option value="operador">Operador</option>
+                            <option value="gestor">Gestor</option>
+                            {user.perfil === 'master' ? <option value="master">Master</option> : null}
+                          </select>
+                        </div>
+                      </div>
+                      <button className="primary" type="submit">
+                        Criar usuário
+                      </button>
+                    </form>
                   </div>
                 ) : null}
                 <div className="tablewrap">

@@ -39,6 +39,11 @@ export async function api<T = unknown>(
     body = JSON.stringify(opts.json);
   }
   const res = await fetch(`${API}${path}`, { ...opts, headers, body });
+  if (opts.signal?.aborted) {
+    const err = new Error('Aborted');
+    err.name = 'AbortError';
+    throw err;
+  }
   if (res.status === 401 && typeof window !== 'undefined' && !path.includes('/auth/login')) {
     clearSession();
     window.location.href = '/login';
