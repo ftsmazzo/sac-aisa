@@ -1,5 +1,7 @@
 import { config } from 'dotenv';
-import { resolve } from 'path';
+import { resolve, join } from 'path';
+import { existsSync } from 'fs';
+import { execSync } from 'child_process';
 import { PrismaClient } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import * as bcrypt from 'bcryptjs';
@@ -9,11 +11,32 @@ config();
 
 const prisma = new PrismaClient();
 
-async function main() {
+async function loadSeedSqlIfNeeded() {
   const count = await prisma.reclamacao.count();
-  console.log(`Reclamações no banco: ${count} (dados iniciais vêm da migration seed_dados_iniciais)`);
+  if (count > 0) {
+    console.log(`Reclamações no banco: ${count} (seed SQL ignorado)`);
+    return;
+  }
 
-  // Usuário admin com senha conhecida (bcrypt), além dos usuários importados do JSON
+  const sqlFile = join(__dirname, 'seed-dados.sql');
+  if (!existsSync(sqlFile)) {
+    console.warn('seed-dados.sql não encontrado; pulando carga inicial');
+    return;
+  }
+
+  console.log('Banco vazio — aplicando seed-dados.sql...');
+  execSync(`npx prisma db execute --file "${sqlFile}"`, {
+    stdio: 'inherit',
+    cwd: __dirname,
+    env: process.env,
+  });
+  const after = await prisma.reclamacao.count();
+  console.log(`Seed SQL OK. Reclamações: ${after}`);
+}
+
+async function main() {
+  await loadSeedSqlIfNeeded();
+
   const demoSalt = randomBytes(8).toString('hex');
   const demoHash = await bcrypt.hash(`${demoSalt}:sac1234`, 10);
   await prisma.usuario.upsert({
@@ -51,7 +74,6 @@ async function main() {
   }
 
   console.log('Seed OK. Login: admin / sac1234');
-  console.log('Usuários do backup JSON mantêm a senha original (migram para bcrypt no 1º login).');
 }
 
 main()

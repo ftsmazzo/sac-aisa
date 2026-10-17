@@ -26,4 +26,5 @@ ENV NODE_ENV=production
 COPY --from=build /app /app
 WORKDIR /app/apps/api
 EXPOSE 3001
-CMD ["sh", "-c", "npx prisma migrate deploy && npx tsx prisma/seed.ts && node dist/main.js"]
+# Limpa migration de seed falha (se existir), aplica schema e carrega dados via seed.ts
+CMD ["sh", "-c", "npx prisma migrate resolve --rolled-back 20261017000000_seed_dados_iniciais || true; npx prisma migrate deploy && npx tsx prisma/seed.ts && node dist/main.js"]
