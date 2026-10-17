@@ -80,4 +80,23 @@ export function uploadUrl(relativePath: string) {
   return `${API}/uploads/${relativePath.replace(/^\/+/, '')}`;
 }
 
+export async function downloadAuthed(path: string, filename: string) {
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${API}${path}`, { headers });
+  if (res.status === 401 && typeof window !== 'undefined') {
+    clearSession();
+    window.location.href = '/login';
+    throw new Error('Não autorizado');
+  }
+  if (!res.ok) throw new Error(`Erro ${res.status}`);
+  const blob = await res.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 export { API };

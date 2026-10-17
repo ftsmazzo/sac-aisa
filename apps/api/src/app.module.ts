@@ -17,6 +17,8 @@ import { EvolutionService } from './whatsapp/evolution.service';
 import { WhatsappService } from './whatsapp/whatsapp.service';
 import { WhatsappController } from './whatsapp/whatsapp.controller';
 import { DadosController } from './dados/dados.controller';
+import { QualidadeController } from './qualidade/qualidade.controller';
+import { QualidadeService } from './qualidade/qualidade.service';
 import { Controller, Get } from '@nestjs/common';
 import { Public } from './auth/auth.guard';
 
@@ -47,6 +49,7 @@ class HealthController {
     IaController,
     WhatsappController,
     DadosController,
+    QualidadeController,
   ],
   providers: [
     PrismaService,
@@ -56,6 +59,7 @@ class HealthController {
     IaService,
     EvolutionService,
     WhatsappService,
+    QualidadeService,
     { provide: APP_GUARD, useClass: AuthGuard },
   ],
 })

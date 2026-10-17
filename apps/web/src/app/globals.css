@@ -225,6 +225,13 @@ button.bar-row.clickable.on { background: var(--azul-claro); border-color: var(-
   padding: 4px 10px; font-size: 12px; cursor: pointer;
 }
 .chip.on { background: var(--azul-claro); border-color: var(--azul); color: var(--azul-esc); }
+button.linkish {
+  background: none; border: none; padding: 0; color: var(--azul-esc); cursor: pointer; text-align: left;
+}
+button.linkish:hover { text-decoration: underline; }
+.plano-list { margin: 0; padding-left: 18px; }
+.plano-list li { margin: 6px 0; font-size: 13px; }
+.subnav .spacer { flex: 1; }
 
 /* Sugestão de causa */
 .sugestao-box {

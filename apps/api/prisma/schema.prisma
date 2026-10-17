@@ -56,6 +56,19 @@ enum WhatsappPapel {
   interno
 }
 
+enum PlanoStatus {
+  aberto
+  em_andamento
+  concluido
+  cancelado
+}
+
+enum PlanoOrigem {
+  kpi
+  manual
+  recorrencia
+}
+
 model Usuario {
   id        String   @id @default(cuid())
   login     String   @unique
@@ -271,4 +284,44 @@ model WhatsappMensagem {
   conversa WhatsappConversa @relation(fields: [conversaId], references: [id], onDelete: Cascade)
 
   @@map("whatsapp_mensagens")
+}
+
+model VendaDia {
+  id        String   @id @default(cuid())
+  sku       String
+  descricao String   @default("")
+  data      String
+  qtde      Int      @default(0)
+  criadoEm  DateTime @default(now())
+  alteradoEm DateTime @updatedAt
+
+  @@unique([sku, data])
+  @@index([data])
+  @@index([sku])
+  @@map("vendas_dia")
+}
+
+model PlanoAcao {
+  id           String      @id @default(cuid())
+  titulo       String
+  descricao    String      @default("")
+  sku          String      @default("")
+  causaId      String      @default("")
+  setorFab     String      @default("")
+  setorResp    String      @default("")
+  status       PlanoStatus @default(aberto)
+  prioridade   String      @default("media")
+  responsavel  String      @default("")
+  prazo        String?
+  origem       PlanoOrigem @default(manual)
+  meta         Json?
+  criadoEm     DateTime    @default(now())
+  criadoPor    String?
+  alteradoEm   DateTime    @updatedAt
+  alteradoPor  String?
+
+  @@index([status])
+  @@index([sku])
+  @@index([setorFab])
+  @@map("planos_acao")
 }

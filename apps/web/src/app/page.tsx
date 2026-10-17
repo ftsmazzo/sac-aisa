@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { api, clearSession, getUser, uploadFile, uploadUrl } from '@/lib/api';
+import { api, clearSession, downloadAuthed, getUser, uploadFile, uploadUrl } from '@/lib/api';
 
-type Tab = 'kpis' | 'lista' | 'alertas' | 'gestao' | 'dados';
+type Tab = 'kpis' | 'lista' | 'alertas' | 'qualidade' | 'gestao' | 'dados';
 
 type Rec = {
   id: string;
@@ -93,6 +93,103 @@ const emptyFiltros: Filtros = {
 
 function nomeCausaLabel(causas: { id: string; nome: string }[], id: string) {
   return causas.find((c) => c.id === id)?.nome || id;
+}
+
+type QualidadePainel = {
+  limitePpm: number;
+  modoContagem: string;
+  totais: {
+    skus: number;
+    vendas: number;
+    reclamacoes: number;
+    ppm: number | null;
+    taxa: number | null;
+    acimaLimite: number;
+    pctAcimaLimite: number | null;
+    semVenda: number;
+  };
+  topDefeitos: {
+    sku: string;
+    produto: string;
+    vendas: number;
+    reclamacoes: number;
+    setorFab: string;
+    setorResp: string;
+    taxa: number | null;
+    ppm: number | null;
+    semVenda: boolean;
+    acimaLimite: boolean;
+  }[];
+  setoresCriticos: {
+    k: string;
+    vendas: number;
+    reclamacoes: number;
+    skus: number;
+    ppm: number | null;
+    taxa: number | null;
+    acimaLimite: boolean;
+  }[];
+  porSetorFab: {
+    k: string;
+    vendas: number;
+    reclamacoes: number;
+    skus: number;
+    ppm: number | null;
+    taxa: number | null;
+    acimaLimite: boolean;
+  }[];
+  porSetorResp: {
+    k: string;
+    vendas: number;
+    reclamacoes: number;
+    skus: number;
+    ppm: number | null;
+    taxa: number | null;
+    acimaLimite: boolean;
+  }[];
+  planosAbertos: number;
+  planos: {
+    id: string;
+    titulo: string;
+    sku: string;
+    setorFab: string;
+    setorResp: string;
+    status: string;
+    prazo?: string | null;
+    responsavel: string;
+  }[];
+  vendasResumo: {
+    linhas: number;
+    skus: number;
+    totalQtde: number;
+    de: string | null;
+    ate: string | null;
+  };
+};
+
+type PlanoRow = {
+  id: string;
+  titulo: string;
+  descricao: string;
+  sku: string;
+  causaId: string;
+  setorFab: string;
+  setorResp: string;
+  status: string;
+  prioridade: string;
+  responsavel: string;
+  prazo?: string | null;
+  origem: string;
+};
+
+function fmtPpm(n: number | null | undefined) {
+  if (n == null || !Number.isFinite(n)) return '—';
+  return `${Math.round(n).toLocaleString('pt-BR')} ppm`;
+}
+
+function fmtTaxa(n: number | null | undefined) {
+  if (n == null || !Number.isFinite(n)) return '—';
+  return `${n.toFixed(3)}%`;
 }
 
 type Alerta = { id: string; tipo: string; titulo: string; mensagem: string };
@@ -217,6 +314,28 @@ export default function HomePage() {
   const [anexos, setAnexos] = useState<Anexo[]>([]);
   const [pendingFiles, setPendingFiles] = useState<PendingAnexo[]>([]);
   const [anexoDrop, setAnexoDrop] = useState(false);
+  const [qualSub, setQualSub] = useState<'painel' | 'importar' | 'planos'>('painel');
+  const [qualPainel, setQualPainel] = useState<QualidadePainel | null>(null);
+  const [qualPlanos, setQualPlanos] = useState<PlanoRow[]>([]);
+  const [vendaTexto, setVendaTexto] = useState('');
+  const [vendaPreview, setVendaPreview] = useState<{
+    linhas: number;
+    skus: number;
+    totalQtde: number;
+    de: string | null;
+    ate: string | null;
+    avisos: string[];
+    avisosTotal: number;
+  } | null>(null);
+  const [novoPlano, setNovoPlano] = useState({
+    titulo: '',
+    descricao: '',
+    sku: '',
+    setorFab: '',
+    setorResp: '',
+    responsavel: '',
+    prazo: '',
+  });
 
   const qs = useMemo(() => {
     const p = new URLSearchParams();
@@ -388,6 +507,36 @@ export default function HomePage() {
     });
     return () => ac.abort();
   }, [tab, loadGestao]);
+
+  const loadQualidade = useCallback(
+    async (signal?: AbortSignal) => {
+      if (tab !== 'qualidade') return;
+      const p = new URLSearchParams();
+      if (filtros.de) p.set('de', filtros.de);
+      if (filtros.ate) p.set('ate', filtros.ate);
+      if (filtros.setor) p.set('setor', filtros.setor);
+      if (filtros.resp) p.set('resp', filtros.resp);
+      if (filtros.sku) p.set('sku', filtros.sku);
+      const [painel, planos] = await Promise.all([
+        api<QualidadePainel>(`/qualidade/painel?${p}`, { signal }),
+        api<PlanoRow[]>(`/qualidade/planos?${p}`, { signal }),
+      ]);
+      if (!signal?.aborted) {
+        setQualPainel(painel);
+        setQualPlanos(planos);
+      }
+    },
+    [tab, filtros.de, filtros.ate, filtros.setor, filtros.resp, filtros.sku],
+  );
+
+  useEffect(() => {
+    if (tab !== 'qualidade') return;
+    const ac = new AbortController();
+    loadQualidade(ac.signal).catch((e) => {
+      if (e?.name !== 'AbortError') setMsg(e.message);
+    });
+    return () => ac.abort();
+  }, [tab, loadQualidade]);
 
   useEffect(() => {
     if (!modal) return;
@@ -634,6 +783,7 @@ export default function HomePage() {
             ['kpis', 'KPIs'],
             ['lista', 'Reclamações'],
             ['alertas', 'Alertas'],
+            ['qualidade', 'Qualidade'],
             ['gestao', 'Gestão'],
             ['dados', 'Dados'],
           ] as const
@@ -641,6 +791,9 @@ export default function HomePage() {
           <button key={id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}>
             {label}
             {id === 'alertas' && alertCount > 0 ? <span className="badge">{alertCount}</span> : null}
+            {id === 'qualidade' && qualPainel && qualPainel.planosAbertos > 0 ? (
+              <span className="badge">{qualPainel.planosAbertos}</span>
+            ) : null}
           </button>
         ))}
       </nav>
@@ -1091,6 +1244,520 @@ export default function HomePage() {
               </div>
             ))}
             {!alertas.length ? <div className="card muted">Nenhum alerta aberto.</div> : null}
+          </>
+        ) : null}
+
+        {tab === 'qualidade' ? (
+          <>
+            <div className="subnav">
+              {(
+                [
+                  ['painel', 'Painel INMETRO'],
+                  ['importar', 'Importar vendas'],
+                  ['planos', 'Planos de ação'],
+                ] as const
+              ).map(([s, label]) => (
+                <button key={s} className={qualSub === s ? 'on' : ''} onClick={() => setQualSub(s)}>
+                  {label}
+                </button>
+              ))}
+              <span className="spacer" />
+              <button
+                className="small"
+                onClick={() =>
+                  downloadAuthed(
+                    `/qualidade/exportar?${qs}`,
+                    `qualidade_${filtros.de || 'inicio'}_${filtros.ate || 'hoje'}.csv`,
+                  )
+                    .then(() => setMsg('CSV de auditoria baixado.'))
+                    .catch((e) => setMsg(e.message))
+                }
+              >
+                Exportar auditoria CSV
+              </button>
+            </div>
+
+            {qualSub === 'importar' ? (
+              <div className="card">
+                <h3>Importar vendas (COD · Descrição · DATA · QTDE)</h3>
+                <p className="muted" style={{ marginTop: 0 }}>
+                  Cole a planilha (tab ou CSV) no formato do ERP. Datas em DD/MM/AAAA. Reimportar o mesmo
+                  dia/SKU sobrescreve a quantidade.
+                </p>
+                <div className="tools">
+                  <label className="small" style={{ cursor: 'pointer' }}>
+                    <span
+                      style={{
+                        display: 'inline-block',
+                        padding: '3px 9px',
+                        border: '1px solid var(--line)',
+                        borderRadius: 5,
+                        background: '#fff',
+                      }}
+                    >
+                      Escolher arquivo
+                    </span>
+                    <input
+                      type="file"
+                      accept=".txt,.csv,.tsv,text/plain"
+                      style={{ display: 'none' }}
+                      onChange={async (e) => {
+                        const f = e.target.files?.[0];
+                        if (!f) return;
+                        const text = await f.text();
+                        setVendaTexto(text);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                  {ehGestor ? null : (
+                    <span className="muted">Somente gestor/master confirma a importação.</span>
+                  )}
+                </div>
+                <textarea
+                  value={vendaTexto}
+                  onChange={(e) => setVendaTexto(e.target.value)}
+                  rows={12}
+                  placeholder={'COD\tDescrição\tDATA\tQTDE\nA70\tEMBALADORA...\t01/06/2026\t22'}
+                  style={{ width: '100%', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
+                />
+                <div className="tools">
+                  <button
+                    onClick={async () => {
+                      try {
+                        const p = await api<NonNullable<typeof vendaPreview>>('/qualidade/vendas/preview', {
+                          method: 'POST',
+                          json: { texto: vendaTexto },
+                        });
+                        setVendaPreview(p);
+                        setMsg(`Preview: ${p.linhas} linhas · ${p.skus} SKUs · ${p.totalQtde} un.`);
+                      } catch (e) {
+                        setMsg(e instanceof Error ? e.message : 'Erro no preview');
+                      }
+                    }}
+                  >
+                    Pré-visualizar
+                  </button>
+                  {ehGestor ? (
+                    <button
+                      className="primary"
+                      disabled={!vendaTexto.trim()}
+                      onClick={async () => {
+                        try {
+                          const r = await api<{
+                            linhas: number;
+                            skus: number;
+                            totalQtde: number;
+                            de: string;
+                            ate: string;
+                            avisosTotal: number;
+                          }>('/qualidade/vendas/importar', {
+                            method: 'POST',
+                            json: { texto: vendaTexto },
+                          });
+                          setMsg(
+                            `Importado: ${r.linhas} linhas · ${r.skus} SKUs · ${r.totalQtde} un. (${r.de} → ${r.ate})` +
+                              (r.avisosTotal ? ` · ${r.avisosTotal} avisos` : ''),
+                          );
+                          setVendaPreview(null);
+                          setQualSub('painel');
+                          await loadQualidade();
+                        } catch (e) {
+                          setMsg(e instanceof Error ? e.message : 'Erro ao importar');
+                        }
+                      }}
+                    >
+                      Confirmar importação
+                    </button>
+                  ) : null}
+                </div>
+                {vendaPreview ? (
+                  <div className="kpi-insight" style={{ marginTop: 12 }}>
+                    <b>{vendaPreview.linhas}</b> linhas · <b>{vendaPreview.skus}</b> SKUs ·{' '}
+                    <b>{vendaPreview.totalQtde}</b> unidades · período {vendaPreview.de || '—'} a{' '}
+                    {vendaPreview.ate || '—'}
+                    {vendaPreview.avisosTotal ? (
+                      <>
+                        <br />
+                        <span style={{ color: 'var(--alerta)' }}>
+                          {vendaPreview.avisosTotal} avisos (ex.: {vendaPreview.avisos.slice(0, 3).join(' · ')})
+                        </span>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {qualSub === 'painel' && qualPainel ? (
+              <>
+                <div className="kpi-hero">
+                  <div className="kpi-panel">
+                    <h3>Itens vendidos</h3>
+                    <div className="kpi-big" style={{ fontSize: 28 }}>
+                      {qualPainel.totais.vendas.toLocaleString('pt-BR')}
+                    </div>
+                    <div className="kpi-big-label">
+                      {qualPainel.vendasResumo.skus} SKUs na base ·{' '}
+                      {qualPainel.vendasResumo.de
+                        ? `${qualPainel.vendasResumo.de} → ${qualPainel.vendasResumo.ate}`
+                        : 'importe vendas'}
+                    </div>
+                  </div>
+                  <div className="kpi-panel">
+                    <h3>Reclamações ({qualPainel.modoContagem})</h3>
+                    <div className="kpi-big" style={{ fontSize: 28 }}>
+                      {qualPainel.totais.reclamacoes.toLocaleString('pt-BR')}
+                    </div>
+                    <div className="kpi-big-label">
+                      taxa {fmtTaxa(qualPainel.totais.taxa)} · limite {qualPainel.limitePpm} ppm
+                    </div>
+                  </div>
+                  <div className="kpi-panel">
+                    <h3>Coeficiente (INMETRO)</h3>
+                    <div className="kpi-big" style={{ fontSize: 26 }}>
+                      {fmtPpm(qualPainel.totais.ppm)}
+                    </div>
+                    <div
+                      className={`kpi-meter ${
+                        qualPainel.totais.ppm != null && qualPainel.totais.ppm > qualPainel.limitePpm
+                          ? 'warn'
+                          : ''
+                      }`}
+                    >
+                      <i
+                        style={{
+                          width: `${Math.min(
+                            100,
+                            qualPainel.totais.ppm != null
+                              ? (qualPainel.totais.ppm / Math.max(qualPainel.limitePpm * 2, 1)) * 100
+                              : 0,
+                          )}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="kpi-big-label">
+                      {qualPainel.totais.acimaLimite} SKUs acima do limite
+                      {qualPainel.totais.pctAcimaLimite != null
+                        ? ` (${qualPainel.totais.pctAcimaLimite}%)`
+                        : ''}
+                      {qualPainel.totais.semVenda
+                        ? ` · ${qualPainel.totais.semVenda} sem venda no período`
+                        : ''}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid2">
+                  <div className="card">
+                    <h3>Top defeitos por SKU (ppm)</h3>
+                    <p className="muted" style={{ margin: '0 0 12px', fontSize: 12 }}>
+                      Clique para filtrar o SAC · Abrir plano cria tratativa de qualidade.
+                    </p>
+                    {!qualPainel.topDefeitos.length ? (
+                      <p className="muted">Sem reclamações no período (ou importe vendas).</p>
+                    ) : (
+                      <div className="tablewrap">
+                        <table className="list">
+                          <thead>
+                            <tr>
+                              <th>SKU</th>
+                              <th>Vendas</th>
+                              <th>Rec.</th>
+                              <th>ppm</th>
+                              <th>Fab.</th>
+                              <th></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {qualPainel.topDefeitos.map((g) => (
+                              <tr key={g.sku}>
+                                <td>
+                                  <button
+                                    type="button"
+                                    className="linkish"
+                                    onClick={() => {
+                                      toggleFiltro({ sku: g.sku });
+                                      setTab('lista');
+                                    }}
+                                  >
+                                    <b>{g.sku}</b>
+                                  </button>
+                                  <br />
+                                  <span className="muted">{g.produto}</span>
+                                  {g.acimaLimite ? (
+                                    <span className="tag aguard" style={{ marginLeft: 6 }}>
+                                      acima
+                                    </span>
+                                  ) : null}
+                                  {g.semVenda ? (
+                                    <span className="tag" style={{ marginLeft: 6 }}>
+                                      sem venda
+                                    </span>
+                                  ) : null}
+                                </td>
+                                <td>{g.vendas}</td>
+                                <td>{g.reclamacoes}</td>
+                                <td>{fmtPpm(g.ppm)}</td>
+                                <td>{g.setorFab || '—'}</td>
+                                <td>
+                                  <button
+                                    type="button"
+                                    className="small"
+                                    onClick={() => {
+                                      setNovoPlano({
+                                        titulo: `Reduzir defeitos ${g.sku}`,
+                                        descricao: `${g.reclamacoes} reclamações / ${g.vendas} vendas (${fmtPpm(g.ppm)})`,
+                                        sku: g.sku,
+                                        setorFab: g.setorFab,
+                                        setorResp: g.setorResp,
+                                        responsavel: '',
+                                        prazo: '',
+                                      });
+                                      setQualSub('planos');
+                                    }}
+                                  >
+                                    Abrir plano
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                  <div className="card">
+                    <h3>Setor de fabricação</h3>
+                    <p className="muted" style={{ margin: '0 0 12px', fontSize: 12 }}>
+                      Relatório para falar com responsáveis da fábrica.
+                    </p>
+                    <div className="bar-list">
+                      {(qualPainel.porSetorFab || []).slice(0, 12).map((g) => {
+                        const max = Math.max(1, ...(qualPainel.porSetorFab || []).map((x) => x.reclamacoes));
+                        const on = filtros.setor === g.k;
+                        return (
+                          <button
+                            type="button"
+                            key={g.k}
+                            className={`bar-row clickable${on ? ' on' : ''}`}
+                            aria-pressed={on}
+                            onClick={() => toggleFiltro({ setor: g.k })}
+                          >
+                            <div className="name" title={g.k}>
+                              Setor {g.k}
+                              {g.acimaLimite ? ' · crítico' : ''}
+                            </div>
+                            <div className="bar-track fab">
+                              <i style={{ width: `${Math.max(4, (g.reclamacoes / max) * 100)}%` }} />
+                            </div>
+                            <div className="bar-meta">
+                              {g.reclamacoes} rec · {fmtPpm(g.ppm)}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {filtros.setor ? (
+                      <div className="kpi-actions">
+                        <button type="button" className="small" onClick={() => setTab('lista')}>
+                          Ver reclamações
+                        </button>
+                        <button
+                          type="button"
+                          className="small primary"
+                          onClick={() => {
+                            setNovoPlano((p) => ({
+                              ...p,
+                              titulo: `Plano qualidade setor ${filtros.setor}`,
+                              setorFab: filtros.setor,
+                            }));
+                            setQualSub('planos');
+                          }}
+                        >
+                          Plano do setor
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="card" style={{ marginTop: 12 }}>
+                  <h3>Planos abertos ({qualPainel.planosAbertos})</h3>
+                  {!qualPainel.planos.length ? (
+                    <p className="muted">Nenhum plano em andamento.</p>
+                  ) : (
+                    <ul className="plano-list">
+                      {qualPainel.planos.map((p) => (
+                        <li key={p.id}>
+                          <b>{p.titulo}</b>
+                          <span className="muted">
+                            {' '}
+                            · {p.sku || '—'} · fab. {p.setorFab || '—'} · {p.status}
+                            {p.prazo ? ` · prazo ${p.prazo}` : ''}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </>
+            ) : null}
+
+            {qualSub === 'painel' && !qualPainel ? (
+              <div className="card muted">Carregando painel de qualidade…</div>
+            ) : null}
+
+            {qualSub === 'planos' ? (
+              <div className="card">
+                <h3>Planos de ação</h3>
+                {ehGestor || user.perfil === 'operador' ? (
+                  <div className="fgrid" style={{ marginBottom: 16 }}>
+                    <div className="field s2">
+                      <label>Título</label>
+                      <input
+                        value={novoPlano.titulo}
+                        onChange={(e) => setNovoPlano((p) => ({ ...p, titulo: e.target.value }))}
+                      />
+                    </div>
+                    <div className="field">
+                      <label>SKU</label>
+                      <input
+                        value={novoPlano.sku}
+                        onChange={(e) => setNovoPlano((p) => ({ ...p, sku: e.target.value.toUpperCase() }))}
+                      />
+                    </div>
+                    <div className="field">
+                      <label>Setor fab.</label>
+                      <input
+                        value={novoPlano.setorFab}
+                        onChange={(e) => setNovoPlano((p) => ({ ...p, setorFab: e.target.value }))}
+                      />
+                    </div>
+                    <div className="field s2">
+                      <label>Descrição</label>
+                      <input
+                        value={novoPlano.descricao}
+                        onChange={(e) => setNovoPlano((p) => ({ ...p, descricao: e.target.value }))}
+                      />
+                    </div>
+                    <div className="field">
+                      <label>Responsável</label>
+                      <input
+                        value={novoPlano.responsavel}
+                        onChange={(e) => setNovoPlano((p) => ({ ...p, responsavel: e.target.value }))}
+                      />
+                    </div>
+                    <div className="field">
+                      <label>Prazo</label>
+                      <input
+                        type="date"
+                        value={novoPlano.prazo}
+                        onChange={(e) => setNovoPlano((p) => ({ ...p, prazo: e.target.value }))}
+                      />
+                    </div>
+                    <div className="field s4">
+                      <button
+                        className="primary"
+                        onClick={async () => {
+                          try {
+                            await api('/qualidade/planos', {
+                              method: 'POST',
+                              json: { ...novoPlano, origem: novoPlano.sku ? 'kpi' : 'manual' },
+                            });
+                            setNovoPlano({
+                              titulo: '',
+                              descricao: '',
+                              sku: '',
+                              setorFab: '',
+                              setorResp: '',
+                              responsavel: '',
+                              prazo: '',
+                            });
+                            setMsg('Plano criado.');
+                            await loadQualidade();
+                          } catch (e) {
+                            setMsg(e instanceof Error ? e.message : 'Erro');
+                          }
+                        }}
+                      >
+                        Salvar plano
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                <div className="tablewrap">
+                  <table className="list">
+                    <thead>
+                      <tr>
+                        <th>Título</th>
+                        <th>SKU</th>
+                        <th>Fab.</th>
+                        <th>Resp.</th>
+                        <th>Prazo</th>
+                        <th>Status</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {qualPlanos.map((p) => (
+                        <tr key={p.id}>
+                          <td>
+                            <b>{p.titulo}</b>
+                            {p.descricao ? (
+                              <>
+                                <br />
+                                <span className="muted">{p.descricao}</span>
+                              </>
+                            ) : null}
+                          </td>
+                          <td>{p.sku || '—'}</td>
+                          <td>{p.setorFab || '—'}</td>
+                          <td>{p.responsavel || '—'}</td>
+                          <td>{p.prazo || '—'}</td>
+                          <td>
+                            <select
+                              value={p.status}
+                              onChange={async (e) => {
+                                try {
+                                  await api(`/qualidade/planos/${p.id}`, {
+                                    method: 'PATCH',
+                                    json: { status: e.target.value },
+                                  });
+                                  await loadQualidade();
+                                } catch (err) {
+                                  setMsg(err instanceof Error ? err.message : 'Erro');
+                                }
+                              }}
+                            >
+                              <option value="aberto">Aberto</option>
+                              <option value="em_andamento">Em andamento</option>
+                              <option value="concluido">Concluído</option>
+                              <option value="cancelado">Cancelado</option>
+                            </select>
+                          </td>
+                          <td>
+                            {p.sku ? (
+                              <button
+                                type="button"
+                                className="small"
+                                onClick={() => {
+                                  toggleFiltro({ sku: p.sku });
+                                  setTab('lista');
+                                }}
+                              >
+                                Ver SAC
+                              </button>
+                            ) : null}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {!qualPlanos.length ? <p className="muted">Nenhum plano cadastrado.</p> : null}
+                </div>
+              </div>
+            ) : null}
           </>
         ) : null}
 
