@@ -48,6 +48,7 @@ type Rec = {
   causa?: { id: string; nome: string; setor: string; acao: string };
 };
 
+type KpiGrupo = { k: string; n: number; custo: number };
 type Kpis = {
   totais: {
     n: number;
@@ -60,9 +61,39 @@ type Kpis = {
     pctMeta: number | null;
     pctRecorrentes: number;
   };
-  direcionamento: { k: string; n: number; custo: number }[];
+  direcionamento: KpiGrupo[];
+  porSetor: KpiGrupo[];
+  porCausa: KpiGrupo[];
   recorrencias: { cod: string; causaId: string; n: number; custo: number }[];
 };
+
+type Filtros = {
+  de: string;
+  ate: string;
+  status: string;
+  dev: string;
+  busca: string;
+  setor: string;
+  resp: string;
+  causa: string;
+  sku: string;
+};
+
+const emptyFiltros: Filtros = {
+  de: '',
+  ate: '',
+  status: '',
+  dev: '',
+  busca: '',
+  setor: '',
+  resp: '',
+  causa: '',
+  sku: '',
+};
+
+function nomeCausaLabel(causas: { id: string; nome: string }[], id: string) {
+  return causas.find((c) => c.id === id)?.nome || id;
+}
 
 type Alerta = { id: string; tipo: string; titulo: string; mensagem: string };
 type Causa = { id: string; nome: string; cat: string; setor: string };
@@ -159,7 +190,7 @@ export default function HomePage() {
   const router = useRouter();
   const [user, setUser] = useState<{ login: string; nome: string; perfil: string } | null>(null);
   const [tab, setTab] = useState<Tab>('kpis');
-  const [filtros, setFiltros] = useState({ de: '', ate: '', status: '', dev: '', busca: '' });
+  const [filtros, setFiltros] = useState<Filtros>(emptyFiltros);
   const [lista, setLista] = useState<Rec[]>([]);
   const [kpis, setKpis] = useState<Kpis | null>(null);
   const [alertas, setAlertas] = useState<Alerta[]>([]);
@@ -194,21 +225,124 @@ export default function HomePage() {
     if (filtros.status) p.set('status', filtros.status);
     if (filtros.dev) p.set('dev', filtros.dev);
     if (filtros.busca) p.set('q', filtros.busca);
+    if (filtros.setor) p.set('setor', filtros.setor);
+    if (filtros.resp) p.set('resp', filtros.resp);
+    if (filtros.causa) p.set('causa', filtros.causa);
+    if (filtros.sku) p.set('sku', filtros.sku);
     return p.toString();
   }, [filtros]);
 
-  const refresh = useCallback(async () => {
-    const [l, k, a, c] = await Promise.all([
-      api<Rec[]>(`/reclamacoes?${qs}`),
-      api<Kpis>(`/kpis?${qs}`),
-      api<Alerta[]>('/alertas?status=aberto'),
-      api<{ abertos: number }>('/alertas/count'),
-    ]);
-    setLista(l);
-    setKpis(k);
-    setAlertas(a);
-    setAlertCount(c.abertos);
-  }, [qs]);
+  const chipsAtivos = useMemo(() => {
+    const chips: { key: keyof Filtros; label: string }[] = [];
+    if (filtros.status) {
+      const map: Record<string, string> = {
+        aguardando: 'Aguardando produto',
+        tratativa: 'Em tratativa',
+        resolvida: 'Resolvidas',
+      };
+      chips.push({ key: 'status', label: `Situação: ${map[filtros.status] || filtros.status}` });
+    }
+    if (filtros.setor) chips.push({ key: 'setor', label: `Fabricação: ${filtros.setor}` });
+    if (filtros.resp) chips.push({ key: 'resp', label: `Resolve: ${filtros.resp}` });
+    if (filtros.causa) chips.push({ key: 'causa', label: `Causa: ${nomeCausaLabel(causas, filtros.causa)}` });
+    if (filtros.sku) chips.push({ key: 'sku', label: `SKU: ${filtros.sku}` });
+    if (filtros.dev) chips.push({ key: 'dev', label: `Devolução: ${filtros.dev}` });
+    if (filtros.busca) chips.push({ key: 'busca', label: `Busca: ${filtros.busca}` });
+    return chips;
+  }, [filtros, causas]);
+
+  function toggleFiltro(patch: Partial<Filtros>, goLista = false) {
+    setFiltros((f) => {
+      const keys = Object.keys(patch) as (keyof Filtros)[];
+      const allOn = keys.length > 0 && keys.every((k) => f[k] === patch[k]);
+      const next = { ...f };
+      for (const k of keys) next[k] = allOn ? '' : String(patch[k] ?? '');
+      return next;
+    });
+    if (goLista) setTab('lista');
+  }
+
+  async function exportRelatorioSetor() {
+    try {
+      const rows = await api<Rec[]>(`/reclamacoes?${qs}`);
+      if (!rows.length) {
+        setMsg('Nenhuma reclamação no filtro atual para exportar.');
+        return;
+      }
+      const esc = (v: unknown) => {
+        const s = String(v ?? '');
+        return /[",;\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const header = [
+        'reg',
+        'data',
+        'sku',
+        'produto',
+        'setor_fabricacao',
+        'setor_responsavel',
+        'causa',
+        'cliente',
+        'cidade',
+        'uf',
+        'situacao',
+        'custo',
+        'reclamacao',
+        'laudo',
+        'solucao',
+      ];
+      const lines = [
+        header.join(';'),
+        ...rows.map((r) =>
+          [
+            r.reg,
+            r.data,
+            r.sku,
+            r.produto,
+            r.setor,
+            r.setorResp,
+            r.causa?.nome,
+            r.cliente,
+            r.cidade,
+            r.uf,
+            r.situacao,
+            r.custoTotal ?? 0,
+            r.reclamacao,
+            r.laudo,
+            r.solucao,
+          ]
+            .map(esc)
+            .join(';'),
+        ),
+      ];
+      const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      const setorSlug = (filtros.setor || 'todos').replace(/[^\w-]+/g, '_');
+      a.href = URL.createObjectURL(blob);
+      a.download = `relatorio_setor_${setorSlug}_${filtros.de || 'inicio'}_${filtros.ate || 'hoje'}.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      setMsg(`Relatório exportado (${rows.length} linhas).`);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Erro ao exportar');
+    }
+  }
+
+  const refresh = useCallback(
+    async (signal?: AbortSignal) => {
+      const [l, k, a, c] = await Promise.all([
+        api<Rec[]>(`/reclamacoes?${qs}`, { signal }),
+        api<Kpis>(`/kpis?${qs}`, { signal }),
+        api<Alerta[]>('/alertas?status=aberto', { signal }),
+        api<{ abertos: number }>('/alertas/count', { signal }),
+      ]);
+      if (signal?.aborted) return;
+      setLista(l);
+      setKpis(k);
+      setAlertas(a);
+      setAlertCount(c.abertos);
+    },
+    [qs],
+  );
 
   useEffect(() => {
     const u = getUser();
@@ -222,14 +356,11 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!user) return;
-    let cancelled = false;
-    refresh()
-      .catch((e) => {
-        if (!cancelled) setMsg(e.message);
-      });
-    return () => {
-      cancelled = true;
-    };
+    const ac = new AbortController();
+    refresh(ac.signal).catch((e) => {
+      if (e?.name !== 'AbortError') setMsg(e.message);
+    });
+    return () => ac.abort();
   }, [user, refresh]);
 
   const loadGestao = useCallback(
@@ -549,8 +680,30 @@ export default function HomePage() {
             placeholder="SKU, cliente, texto…"
           />
         </label>
-        <button onClick={() => setFiltros({ de: '', ate: '', status: '', dev: '', busca: '' })}>Limpar</button>
+        <button onClick={() => setFiltros({ ...emptyFiltros, de: filtros.de, ate: filtros.ate })}>Limpar filtros</button>
       </div>
+      {chipsAtivos.length ? (
+        <div className="filtro-chips">
+          <span className="muted">Ativos:</span>
+          {chipsAtivos.map((c) => (
+            <button
+              key={c.key}
+              type="button"
+              className="chip on"
+              onClick={() => setFiltros((f) => ({ ...f, [c.key]: '' }))}
+              title="Remover filtro"
+            >
+              {c.label} ×
+            </button>
+          ))}
+          <button type="button" className="small" onClick={() => setTab('lista')}>
+            Tratar na lista ({lista.length})
+          </button>
+          <button type="button" className="small primary" onClick={exportRelatorioSetor}>
+            Exportar relatório CSV
+          </button>
+        </div>
+      ) : null}
 
       <main>
         {msg ? (
@@ -568,7 +721,7 @@ export default function HomePage() {
               <div className="kpi-panel">
                 <h3>Situação no período</h3>
                 <div className="kpi-big">{kpis.totais.n}</div>
-                <div className="kpi-big-label">reclamações filtradas</div>
+                <div className="kpi-big-label">reclamações no filtro · clique para filtrar</div>
                 {(() => {
                   const tot = Math.max(kpis.totais.n, 1);
                   const pctA = (kpis.totais.aguardando / tot) * 100;
@@ -582,15 +735,30 @@ export default function HomePage() {
                         <i className="s-ok" style={{ width: `${pctR}%` }} />
                       </div>
                       <div className="kpi-legend">
-                        <span>
+                        <button
+                          type="button"
+                          className={`kpi-click${filtros.status === 'aguardando' ? ' on' : ''}`}
+                          aria-pressed={filtros.status === 'aguardando'}
+                          onClick={() => toggleFiltro({ status: 'aguardando' })}
+                        >
                           Aguardando <b>{kpis.totais.aguardando}</b>
-                        </span>
-                        <span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`kpi-click${filtros.status === 'tratativa' ? ' on' : ''}`}
+                          aria-pressed={filtros.status === 'tratativa'}
+                          onClick={() => toggleFiltro({ status: 'tratativa' })}
+                        >
                           Tratativa <b>{kpis.totais.tratativa}</b>
-                        </span>
-                        <span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`kpi-click${filtros.status === 'resolvida' ? ' on' : ''}`}
+                          aria-pressed={filtros.status === 'resolvida'}
+                          onClick={() => toggleFiltro({ status: 'resolvida' })}
+                        >
                           Resolvidas <b>{kpis.totais.resolvida}</b>
-                        </span>
+                        </button>
                       </div>
                     </>
                   );
@@ -605,6 +773,20 @@ export default function HomePage() {
                   <div className="kpi-big-label">
                     tempo médio {kpis.totais.tempoMedio == null ? '—' : `${kpis.totais.tempoMedio.toFixed(1)} dias`}
                   </div>
+                  {(kpis.porSetor?.[0] || kpis.direcionamento?.[0]) && (
+                    <p className="kpi-insight">
+                      {kpis.porSetor?.[0] ? (
+                        <>
+                          Mais volume na fabricação <b>{kpis.porSetor[0].k}</b> ({kpis.porSetor[0].n}).{' '}
+                        </>
+                      ) : null}
+                      {kpis.direcionamento?.[0] ? (
+                        <>
+                          Quadro resolve em <b>{kpis.direcionamento[0].k}</b> ({kpis.direcionamento[0].n}).
+                        </>
+                      ) : null}
+                    </p>
+                  )}
                 </div>
               </div>
               <div className="kpi-panel">
@@ -617,21 +799,37 @@ export default function HomePage() {
                     <i style={{ width: `${Math.min(100, kpis.totais.pctMeta || 0)}%` }} />
                   </div>
                   <div className="kpi-big-label">{kpis.totais.pctRecorrentes}% com causa recorrente no SKU</div>
+                  <div className="kpi-actions">
+                    <button type="button" className="small" onClick={() => setTab('lista')}>
+                      Abrir lista filtrada
+                    </button>
+                    <button type="button" className="small primary" onClick={exportRelatorioSetor}>
+                      Relatório CSV
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
 
             <div className="grid2">
               <div className="card">
-                <h3>Para onde direcionar</h3>
+                <h3>Setor que resolve o problema</h3>
                 <p className="muted" style={{ margin: '0 0 12px', fontSize: 12 }}>
-                  Volume de reclamações por setor responsável (causa → setor).
+                  Clique para filtrar · porta de tratativa (causa → setor responsável).
                 </p>
                 <div className="bar-list">
-                  {kpis.direcionamento.slice(0, 10).map((g) => {
+                  {(kpis.direcionamento || []).slice(0, 12).map((g) => {
                     const max = kpis.direcionamento[0]?.n || 1;
+                    const on = filtros.resp === g.k;
                     return (
-                      <div className="bar-row" key={g.k}>
+                      <button
+                        type="button"
+                        className={`bar-row clickable${on ? ' on' : ''}`}
+                        key={g.k}
+                        aria-pressed={on}
+                        onClick={() => toggleFiltro({ resp: g.k })}
+                        title="Filtrar por setor responsável"
+                      >
                         <div className="name" title={g.k}>
                           {g.k}
                         </div>
@@ -641,15 +839,64 @@ export default function HomePage() {
                         <div className="bar-meta">
                           {g.n} · {brl(g.custo)}
                         </div>
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
               </div>
               <div className="card">
+                <h3>Setor de fabricação do produto</h3>
+                <p className="muted" style={{ margin: '0 0 12px', fontSize: 12 }}>
+                  Campo setor da reclamação (ex.: 4, 5, 7) · use para falar com o responsável da fábrica.
+                </p>
+                <div className="bar-list">
+                  {!(kpis.porSetor || []).length ? (
+                    <p className="muted">Sem dados de setor de fabricação no período.</p>
+                  ) : (
+                    (kpis.porSetor || []).slice(0, 12).map((g) => {
+                      const max = kpis.porSetor[0]?.n || 1;
+                      const on = filtros.setor === g.k;
+                      return (
+                        <button
+                          type="button"
+                          className={`bar-row clickable${on ? ' on' : ''}`}
+                          key={g.k}
+                          aria-pressed={on}
+                          onClick={() => toggleFiltro({ setor: g.k })}
+                          title="Filtrar por setor de fabricação"
+                        >
+                          <div className="name" title={g.k}>
+                            Setor {g.k}
+                          </div>
+                          <div className="bar-track fab">
+                            <i style={{ width: `${Math.max(4, (g.n / max) * 100)}%` }} />
+                          </div>
+                          <div className="bar-meta">
+                            {g.n} · {brl(g.custo)}
+                          </div>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+                {filtros.setor ? (
+                  <div className="kpi-actions" style={{ marginTop: 12 }}>
+                    <button type="button" className="small primary" onClick={exportRelatorioSetor}>
+                      Relatório do setor {filtros.setor}
+                    </button>
+                    <button type="button" className="small" onClick={() => setTab('lista')}>
+                      Tratar reclamações
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="grid2" style={{ marginTop: 12 }}>
+              <div className="card">
                 <h3>Problemas que se repetem</h3>
                 <p className="muted" style={{ margin: '0 0 12px', fontSize: 12 }}>
-                  Mesmo SKU + mesma causa, mais de uma vez no período.
+                  Mesmo SKU + mesma causa · clique para filtrar e tratar.
                 </p>
                 {!kpis.recorrencias.length ? (
                   <p className="muted">Nenhuma repetição no período.</p>
@@ -658,8 +905,15 @@ export default function HomePage() {
                     {kpis.recorrencias.slice(0, 10).map((g) => {
                       const max = kpis.recorrencias[0]?.n || 1;
                       const nome = nomeCausa(g.causaId);
+                      const on = filtros.sku === g.cod && filtros.causa === g.causaId;
                       return (
-                        <div className="bar-row" key={`${g.cod}-${g.causaId}`}>
+                        <button
+                          type="button"
+                          className={`bar-row clickable${on ? ' on' : ''}`}
+                          key={`${g.cod}-${g.causaId}`}
+                          aria-pressed={on}
+                          onClick={() => toggleFiltro({ sku: g.cod, causa: g.causaId })}
+                        >
                           <div className="name" title={`${g.cod} — ${nome}`}>
                             <b>{g.cod}</b> · {nome}
                           </div>
@@ -669,11 +923,44 @@ export default function HomePage() {
                           <div className="bar-meta">
                             {g.n}× · {brl(g.custo)}
                           </div>
-                        </div>
+                        </button>
                       );
                     })}
                   </div>
                 )}
+              </div>
+              <div className="card">
+                <h3>Principais causas</h3>
+                <p className="muted" style={{ margin: '0 0 12px', fontSize: 12 }}>
+                  Clique para filtrar o restante dos indicadores e a lista.
+                </p>
+                <div className="bar-list">
+                  {(kpis.porCausa || []).slice(0, 10).map((g) => {
+                    const max = kpis.porCausa[0]?.n || 1;
+                    const causaId = causas.find((c) => c.nome === g.k)?.id || '';
+                    const on = !!causaId && filtros.causa === causaId;
+                    return (
+                      <button
+                        type="button"
+                        className={`bar-row clickable${on ? ' on' : ''}`}
+                        key={g.k}
+                        disabled={!causaId}
+                        aria-pressed={on}
+                        onClick={() => causaId && toggleFiltro({ causa: causaId })}
+                      >
+                        <div className="name" title={g.k}>
+                          {g.k}
+                        </div>
+                        <div className="bar-track">
+                          <i style={{ width: `${Math.max(4, (g.n / max) * 100)}%` }} />
+                        </div>
+                        <div className="bar-meta">
+                          {g.n} · {brl(g.custo)}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </>
@@ -698,6 +985,7 @@ export default function HomePage() {
                     <th>SKU</th>
                     <th>Reclamação</th>
                     <th>Causa</th>
+                    <th>Setor fab.</th>
                     <th>Setor resp.</th>
                     <th>Cliente</th>
                     <th>Dias</th>
@@ -737,6 +1025,11 @@ export default function HomePage() {
                       </td>
                       <td style={{ maxWidth: 220 }}>{r.reclamacao}</td>
                       <td>{r.causa?.nome}</td>
+                      <td>
+                        <span className="tag" title="Setor de fabricação">
+                          {r.setor || '—'}
+                        </span>
+                      </td>
                       <td>
                         <span className="tag trat">{r.setorResp}</span>
                       </td>

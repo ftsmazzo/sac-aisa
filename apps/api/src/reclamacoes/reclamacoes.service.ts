@@ -33,7 +33,7 @@ export class ReclamacoesService {
       if (query.ate) where.data.lte = query.ate;
     }
     if (query.empresa) where.empresa = query.empresa;
-    if (query.setor) where.setor = query.setor;
+    if (query.setor && query.setor !== '(vazio)') where.setor = query.setor;
     if (query.laudo) where.laudo = query.laudo;
     if (query.canal) where.canal = query.canal;
     if (query.uf) where.uf = query.uf;
@@ -58,6 +58,10 @@ export class ReclamacoesService {
       const manual = (r.setorRespManual || '').trim();
       return (manual || causaDe(r, overrides).setor) === query.resp;
     });
+    if (query.sku) {
+      const sku = query.sku.toUpperCase();
+      rows = rows.filter((r) => String(r.sku || '').toUpperCase() === sku);
+    }
     if (query.q) {
       const q = query.q.toLowerCase();
       rows = rows.filter((r) =>
@@ -86,7 +90,8 @@ export class ReclamacoesService {
     if (query.de) rows = rows.filter((r) => !r.data || r.data >= query.de!);
     if (query.ate) rows = rows.filter((r) => !r.data || r.data <= query.ate!);
     if (query.empresa) rows = rows.filter((r) => r.empresa === query.empresa);
-    if (query.setor) rows = rows.filter((r) => r.setor === query.setor);
+    if (query.setor === '(vazio)') rows = rows.filter((r) => !r.setor);
+    else if (query.setor) rows = rows.filter((r) => r.setor === query.setor);
     if (query.laudo) rows = rows.filter((r) => r.laudo === query.laudo);
     if (query.canal) rows = rows.filter((r) => r.canal === query.canal);
     if (query.uf) rows = rows.filter((r) => r.uf === query.uf);

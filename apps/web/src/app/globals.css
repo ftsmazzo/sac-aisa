@@ -200,7 +200,31 @@ table.list tr:hover td { background: #f6f9ff; cursor: pointer; }
 .bar-track { height: 8px; background: #e8eef8; border-radius: 999px; overflow: hidden; }
 .bar-track > i { display: block; height: 100%; background: var(--azul); border-radius: 999px; }
 .bar-track.cost > i { background: #0f766e; }
+.bar-track.fab > i { background: #b45309; }
 .bar-meta { font-size: 12px; color: var(--muted); white-space: nowrap; text-align: right; }
+button.bar-row.clickable {
+  width: 100%; text-align: left; background: transparent; border: 1px solid transparent;
+  border-radius: 6px; padding: 6px 8px; cursor: pointer;
+}
+button.bar-row.clickable:hover { background: var(--azul-claro); border-color: #c5d4ef; }
+button.bar-row.clickable.on { background: var(--azul-claro); border-color: var(--azul); }
+.kpi-click {
+  border: 1px solid transparent; background: #f3f6fb; border-radius: 999px;
+  padding: 4px 10px; font-size: 12px; color: var(--muted); cursor: pointer;
+}
+.kpi-click b { color: var(--ink); }
+.kpi-click:hover, .kpi-click.on { border-color: var(--azul); background: var(--azul-claro); color: var(--azul-esc); }
+.kpi-insight { margin: 8px 0 0; font-size: 12px; color: var(--muted); line-height: 1.4; }
+.kpi-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.filtro-chips {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  padding: 0 16px 10px; max-width: 1400px; margin: 0 auto;
+}
+.chip {
+  border: 1px solid var(--line); background: #fff; border-radius: 999px;
+  padding: 4px 10px; font-size: 12px; cursor: pointer;
+}
+.chip.on { background: var(--azul-claro); border-color: var(--azul); color: var(--azul-esc); }
 
 /* Sugestão de causa */
 .sugestao-box {
