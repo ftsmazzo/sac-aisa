@@ -66,6 +66,43 @@ type Kpis = {
 
 type Alerta = { id: string; tipo: string; titulo: string; mensagem: string };
 type Causa = { id: string; nome: string; cat: string; setor: string };
+type UsuarioRow = {
+  id: string;
+  login: string;
+  nome: string;
+  perfil: string;
+  ativo: boolean;
+  telefone?: string | null;
+  criadoEm?: string;
+  criadoPor?: string | null;
+};
+type RegraRow = {
+  id: string;
+  nome: string;
+  cat: string;
+  setor: string;
+  acao: string;
+  customizado?: boolean;
+};
+type ProdutoRow = {
+  id: string;
+  cod: string;
+  produto: string;
+  setor: string;
+  status: string;
+  categoria: string;
+  familia: string;
+};
+type AuditoriaRow = {
+  id: string;
+  ts: string;
+  user: string;
+  nome?: string;
+  perfil?: string;
+  acao: string;
+  alvo?: string;
+  detalhe?: string;
+};
 
 const emptyForm = {
   data: '',
@@ -128,6 +165,9 @@ export default function HomePage() {
   const [msg, setMsg] = useState('');
   const [gestaoSub, setGestaoSub] = useState<'usuarios' | 'regras' | 'produtos' | 'auditoria'>('usuarios');
   const [gestaoData, setGestaoData] = useState<unknown[]>([]);
+  const [novoUser, setNovoUser] = useState({ login: '', nome: '', senha: '', perfil: 'operador' });
+  const [produtoQ, setProdutoQ] = useState('');
+  const [produtoBusca, setProdutoBusca] = useState('');
 
   const qs = useMemo(() => {
     const p = new URLSearchParams();
@@ -163,7 +203,7 @@ export default function HomePage() {
     refresh().catch((e) => setMsg(e.message));
   }, [router, refresh]);
 
-  useEffect(() => {
+  const loadGestao = useCallback(async () => {
     if (tab !== 'gestao') return;
     const path =
       gestaoSub === 'usuarios'
@@ -171,10 +211,15 @@ export default function HomePage() {
         : gestaoSub === 'regras'
           ? '/gestao/regras'
           : gestaoSub === 'produtos'
-            ? '/gestao/produtos'
+            ? `/gestao/produtos${produtoQ ? `?q=${encodeURIComponent(produtoQ)}` : ''}`
             : '/gestao/auditoria?limit=100';
-    api<unknown[]>(path).then(setGestaoData).catch((e) => setMsg(e.message));
-  }, [tab, gestaoSub]);
+    const data = await api<unknown[]>(path);
+    setGestaoData(data);
+  }, [tab, gestaoSub, produtoQ]);
+
+  useEffect(() => {
+    loadGestao().catch((e) => setMsg(e.message));
+  }, [loadGestao]);
 
   function openNew() {
     setEditId(null);
@@ -556,17 +601,225 @@ export default function HomePage() {
         {tab === 'gestao' ? (
           <>
             <div className="subnav">
-              {(['usuarios', 'regras', 'produtos', 'auditoria'] as const).map((s) => (
+              {(
+                [
+                  ['usuarios', 'Usuários'],
+                  ['regras', 'Regras'],
+                  ['produtos', 'Produtos'],
+                  ['auditoria', 'Auditoria'],
+                ] as const
+              ).map(([s, label]) => (
                 <button key={s} className={gestaoSub === s ? 'on' : ''} onClick={() => setGestaoSub(s)}>
-                  {s}
+                  {label}
                 </button>
               ))}
             </div>
-            <div className="card">
-              <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, margin: 0 }}>
-                {JSON.stringify(gestaoData, null, 2).slice(0, 14000)}
-              </pre>
-            </div>
+
+            {gestaoSub === 'usuarios' ? (
+              <>
+                {ehGestor ? (
+                  <div className="card" style={{ marginBottom: 12 }}>
+                    <h3>Novo usuário</h3>
+                    <div className="fgrid" style={{ marginBottom: 10 }}>
+                      <div className="field">
+                        <label>Login</label>
+                        <input value={novoUser.login} onChange={(e) => setNovoUser((u) => ({ ...u, login: e.target.value }))} />
+                      </div>
+                      <div className="field">
+                        <label>Nome</label>
+                        <input value={novoUser.nome} onChange={(e) => setNovoUser((u) => ({ ...u, nome: e.target.value }))} />
+                      </div>
+                      <div className="field">
+                        <label>Senha</label>
+                        <input
+                          type="password"
+                          value={novoUser.senha}
+                          onChange={(e) => setNovoUser((u) => ({ ...u, senha: e.target.value }))}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Perfil</label>
+                        <select value={novoUser.perfil} onChange={(e) => setNovoUser((u) => ({ ...u, perfil: e.target.value }))}>
+                          <option value="operador">Operador</option>
+                          <option value="gestor">Gestor</option>
+                          {user.perfil === 'master' ? <option value="master">Master</option> : null}
+                        </select>
+                      </div>
+                    </div>
+                    <button
+                      className="primary"
+                      onClick={async () => {
+                        await api('/gestao/usuarios', { method: 'POST', json: novoUser });
+                        setNovoUser({ login: '', nome: '', senha: '', perfil: 'operador' });
+                        setMsg('Usuário criado.');
+                        await loadGestao();
+                      }}
+                    >
+                      Criar usuário
+                    </button>
+                  </div>
+                ) : null}
+                <div className="tablewrap">
+                  <table className="list" style={{ minWidth: 720 }}>
+                    <thead>
+                      <tr>
+                        <th>Login</th>
+                        <th>Nome</th>
+                        <th>Perfil</th>
+                        <th>Status</th>
+                        <th>Criado por</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(gestaoData as UsuarioRow[]).map((u) => (
+                        <tr key={u.id} style={{ cursor: 'default' }}>
+                          <td>
+                            <b>{u.login}</b>
+                          </td>
+                          <td>{u.nome}</td>
+                          <td>
+                            <span className="tag trat">{u.perfil}</span>
+                          </td>
+                          <td>{u.ativo ? <span className="tag ok">Ativo</span> : <span className="tag bad">Inativo</span>}</td>
+                          <td className="muted">{u.criadoPor || '—'}</td>
+                          <td onClick={(e) => e.stopPropagation()}>
+                            {ehGestor ? (
+                              <button
+                                className="small"
+                                onClick={async () => {
+                                  await api(`/gestao/usuarios/${u.id}`, {
+                                    method: 'PATCH',
+                                    json: { ativo: !u.ativo },
+                                  });
+                                  await loadGestao();
+                                }}
+                              >
+                                {u.ativo ? 'Desativar' : 'Ativar'}
+                              </button>
+                            ) : null}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : null}
+
+            {gestaoSub === 'regras' ? (
+              <div className="tablewrap">
+                <table className="list" style={{ minWidth: 900 }}>
+                  <thead>
+                    <tr>
+                      <th>Causa</th>
+                      <th>Categoria</th>
+                      <th>Setor responsável</th>
+                      <th>Ação sugerida</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(gestaoData as RegraRow[]).map((r) => (
+                      <tr key={r.id} style={{ cursor: 'default' }}>
+                        <td>
+                          <b>{r.nome}</b>
+                          <br />
+                          <span className="muted">{r.id}</span>
+                        </td>
+                        <td>{r.cat}</td>
+                        <td>{r.setor}</td>
+                        <td style={{ maxWidth: 360 }}>{r.acao}</td>
+                        <td>{r.customizado ? <span className="tag trat">Custom</span> : <span className="muted">Padrão</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+
+            {gestaoSub === 'produtos' ? (
+              <>
+                <div className="tools">
+                  <input
+                    placeholder="Buscar código, produto ou família…"
+                    value={produtoQ}
+                    onChange={(e) => setProdutoQ(e.target.value)}
+                    style={{ minWidth: 280 }}
+                  />
+                  <span className="muted">{(gestaoData as ProdutoRow[]).length} produtos</span>
+                </div>
+                <div className="tablewrap">
+                  <table className="list" style={{ minWidth: 900 }}>
+                    <thead>
+                      <tr>
+                        <th>Código</th>
+                        <th>Produto</th>
+                        <th>Setor</th>
+                        <th>Família</th>
+                        <th>Categoria</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(gestaoData as ProdutoRow[]).map((p) => (
+                        <tr key={p.id} style={{ cursor: 'default' }}>
+                          <td>
+                            <b>{p.cod}</b>
+                          </td>
+                          <td>{p.produto}</td>
+                          <td>{p.setor}</td>
+                          <td>{p.familia || '—'}</td>
+                          <td className="muted">{p.categoria || '—'}</td>
+                          <td>
+                            {p.status === 'ATIVO' ? (
+                              <span className="tag ok">Ativo</span>
+                            ) : (
+                              <span className="tag bad">Inativo</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : null}
+
+            {gestaoSub === 'auditoria' ? (
+              <div className="tablewrap">
+                <table className="list" style={{ minWidth: 900 }}>
+                  <thead>
+                    <tr>
+                      <th>Quando</th>
+                      <th>Usuário</th>
+                      <th>Ação</th>
+                      <th>Alvo</th>
+                      <th>Detalhe</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(gestaoData as AuditoriaRow[]).map((a) => (
+                      <tr key={a.id} style={{ cursor: 'default' }}>
+                        <td className="muted">{a.ts ? new Date(a.ts).toLocaleString('pt-BR') : '—'}</td>
+                        <td>
+                          <b>{a.user}</b>
+                          {a.perfil ? (
+                            <>
+                              <br />
+                              <span className="muted">{a.perfil}</span>
+                            </>
+                          ) : null}
+                        </td>
+                        <td>{a.acao}</td>
+                        <td>{a.alvo || '—'}</td>
+                        <td style={{ maxWidth: 360 }}>{a.detalhe || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
           </>
         ) : null}
 
