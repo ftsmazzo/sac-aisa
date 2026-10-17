@@ -30,6 +30,12 @@ function bool(v) {
   return v ? 'true' : 'false';
 }
 
+function escTs(s) {
+  if (s === null || s === undefined || s === '') return 'CURRENT_TIMESTAMP';
+  const t = String(s).replace(/Z$/i, '').replace('T', ' ');
+  return `'${t.replace(/'/g, "''")}'::timestamp`;
+}
+
 function situacao(r) {
   if (r.dataAcao) return 'resolvida';
   return r.devolucao === 'AGUARDANDO' ? 'aguardando' : 'tratativa';
@@ -91,7 +97,7 @@ lines.push('INSERT INTO config (chave, valor) VALUES');
 lines.push(configs.map(([k, v]) => `(${esc(k)},${esc(v)})`).join(',\n') + ';');
 lines.push('');
 
-const produtos = seedTxt
+const produtosRaw = seedTxt
   .split(/\r?\n/)
   .map((l) => l.trim())
   .filter(Boolean)
@@ -106,6 +112,14 @@ const produtos = seedTxt
       familia: (fam || '').trim(),
     };
   });
+const produtos = [];
+const seenCod = new Set();
+for (const p of produtosRaw) {
+  const key = p.cod.toUpperCase();
+  if (seenCod.has(key)) continue;
+  seenCod.add(key);
+  produtos.push(p);
+}
 
 lines.push(`-- produtos do HTML SEED: ${produtos.length}`);
 for (let i = 0; i < produtos.length; i += 50) {
@@ -134,7 +148,7 @@ if (users.length) {
     users
       .map((u) => {
         const id = 'user_' + String(u.login).toLowerCase().replace(/[^a-z0-9]/g, '_');
-        const criado = u.criadoEm ? esc(u.criadoEm) : now;
+        const criado = u.criadoEm ? escTs(u.criadoEm) : now;
         return `(${[id, String(u.login).toLowerCase(), u.nome, u.perfil, u.salt, u.hash].map(esc).join(',')},${bool(u.ativo !== false)},NULL,${criado},${esc(u.criadoPor || 'seed')},${now})`;
       })
       .join(',\n') + ';',
@@ -192,9 +206,9 @@ for (let i = 0; i < regs.length; i += 25) {
           esc('import'),
           'NULL',
           'false',
-          r.criadoEm ? esc(r.criadoEm) : now,
+          r.criadoEm ? escTs(r.criadoEm) : now,
           esc(r.criadoPor || 'seed'),
-          r.alteradoEm ? esc(r.alteradoEm) : now,
+          r.alteradoEm ? escTs(r.alteradoEm) : now,
           esc(r.alteradoPor || 'seed'),
         ];
         return `(${vals.join(',')})`;
@@ -217,7 +231,7 @@ for (let i = 0; i < aud.length; i += 50) {
         const id = String(a.id || `aud_${i + idx}`);
         return `(${[
           esc(id),
-          a.ts ? esc(a.ts) : now,
+          a.ts ? escTs(a.ts) : now,
           esc(a.user || ''),
           esc(a.nome || ''),
           esc(a.perfil || ''),
