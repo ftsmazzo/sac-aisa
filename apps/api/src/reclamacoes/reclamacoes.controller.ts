@@ -66,6 +66,11 @@ export class ReclamacoesController {
     return this.service.get(id);
   }
 
+  @Get('reclamacoes/:id/parecidos')
+  parecidos(@Param('id') id: string) {
+    return this.service.parecidos(id);
+  }
+
   @Post('reclamacoes')
   create(@Body() body: Record<string, unknown>, @Req() req: { user: AuthUser }) {
     return this.service.create(body, req.user);
