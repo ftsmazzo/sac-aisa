@@ -219,6 +219,8 @@ button.bar-row.clickable.on { background: var(--azul-claro); border-color: var(-
 }
 .kpi-click b { color: var(--ink); }
 .kpi-click:hover, .kpi-click.on { border-color: var(--azul); background: var(--azul-claro); color: var(--azul-esc); }
+.agente-triagem { border-color: var(--azul); }
+.agente-triagem textarea { font: inherit; }
 .kpi-insight { margin: 8px 0 0; font-size: 12px; color: var(--muted); line-height: 1.4; }
 .kpi-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .filtro-chips {

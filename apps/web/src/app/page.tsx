@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, clearSession, downloadAuthed, getUser, uploadFile, uploadUrl } from '@/lib/api';
 
-type Tab = 'kpis' | 'lista' | 'alertas' | 'decisoes' | 'qualidade' | 'gestao' | 'dados';
+type Tab = 'triagem' | 'kpis' | 'lista' | 'alertas' | 'decisoes' | 'qualidade' | 'gestao' | 'dados';
 
 type Rec = {
   id: string;
@@ -315,7 +315,7 @@ function tagSit(s?: string) {
 export default function HomePage() {
   const router = useRouter();
   const [user, setUser] = useState<{ login: string; nome: string; perfil: string } | null>(null);
-  const [tab, setTab] = useState<Tab>('kpis');
+  const [tab, setTab] = useState<Tab>('triagem');
   const [filtros, setFiltros] = useState<Filtros>(emptyFiltros);
   const [lista, setLista] = useState<Rec[]>([]);
   const [kpis, setKpis] = useState<Kpis | null>(null);
@@ -360,6 +360,20 @@ export default function HomePage() {
   const [decisoes, setDecisoes] = useState<CartaoDecisao[]>([]);
   const [parecidos, setParecidos] = useState<Parecido[]>([]);
   const [sinais, setSinais] = useState<CartaoDecisao[]>([]);
+  const [triagemTexto, setTriagemTexto] = useState('');
+  const [triagemSku, setTriagemSku] = useState('');
+  const [triagem, setTriagem] = useState<{
+    causaId: string;
+    causaNome: string;
+    setor: string;
+    acao?: string;
+    peca: string;
+    confianca: number;
+    fonte: string;
+    explicacao?: string;
+  } | null>(null);
+  const [triagemExemplos, setTriagemExemplos] = useState<Rec[]>([]);
+  const [triagemBusy, setTriagemBusy] = useState(false);
   const [novoPlano, setNovoPlano] = useState({
     titulo: '',
     descricao: '',
@@ -817,6 +831,68 @@ export default function HomePage() {
     }
   }
 
+  async function classificarTriagem() {
+    if (!triagemTexto.trim()) {
+      setMsg('Escreva o relato para o agente de triagem ler.');
+      return;
+    }
+    setTriagemBusy(true);
+    try {
+      const s = await api<{
+        causaId: string;
+        causaNome: string;
+        setor: string;
+        acao?: string;
+        peca: string;
+        confianca: number;
+        fonte: string;
+        explicacao?: string;
+      }>('/ia/classificar', {
+        method: 'POST',
+        json: { reclamacao: triagemTexto, sku: triagemSku, laudo: '', solucao: '' },
+      });
+      setTriagem(s);
+      if (triagemSku.trim()) {
+        const rows = await api<Rec[]>(`/reclamacoes?sku=${encodeURIComponent(triagemSku.trim())}`);
+        setTriagemExemplos(rows.filter((r) => (r.causaId || r.causa?.id) === s.causaId).slice(0, 3));
+      } else {
+        setTriagemExemplos([]);
+      }
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'O agente de triagem não respondeu');
+    } finally {
+      setTriagemBusy(false);
+    }
+  }
+
+  function usarTriagemNaFicha() {
+    if (!triagem) return;
+    setEditId(null);
+    setParecidos([]);
+    setForm({
+      ...emptyForm,
+      data: new Date().toISOString().slice(0, 10),
+      reclamacao: triagemTexto,
+      sku: triagemSku.toUpperCase(),
+      produto: triagemSku.toUpperCase(),
+      causaId: triagem.causaId,
+      peca: triagem.peca || '',
+      causaManual: true,
+    });
+    setSugestao({
+      causaNome: triagem.causaNome,
+      setor: triagem.setor,
+      peca: triagem.peca,
+      confianca: triagem.confianca,
+      fonte: triagem.fonte,
+      explicacao: triagem.explicacao,
+      acao: triagem.acao,
+    });
+    setAnexos([]);
+    clearPendingFiles();
+    setModal(true);
+  }
+
   async function receber(id: string) {
     await api(`/reclamacoes/${id}/receber`, { method: 'POST' });
     await refresh();
@@ -830,7 +906,7 @@ export default function HomePage() {
     <div>
       <header className="top">
         <span className="titulo">SAC</span>
-        <span className="muted">AISA em nuvem · Evolution + Postgres</span>
+        <span className="muted">Agente de triagem · versão visível</span>
         <span className="spacer" />
         {user.perfil === 'master' ? (
           evolucao?.ativa ? (
@@ -898,6 +974,7 @@ export default function HomePage() {
       <nav className="tabs">
         {(
           [
+            ['triagem', 'Triagem'],
             ['kpis', 'KPIs'],
             ['lista', 'Reclamações'],
             ['alertas', 'Alertas'],
@@ -978,6 +1055,70 @@ export default function HomePage() {
       ) : null}
 
       <main>
+        {tab === 'triagem' ? (
+          <div className="card agente-triagem">
+            <h3>Agente de triagem</h3>
+            <p>
+              Este é o único agente ligado. Ele atua no começo do caso: lê o relato e devolve causa,
+              setor e a ação que o catálogo já manda. A regra do SAC decide. O modelo só entra se houver
+              chave e se concordar com a regra. Ele não grava sozinho, não marca procedência e não mexe
+              em valor nem em situação.
+            </p>
+            <label>
+              Relato
+              <textarea
+                value={triagemTexto}
+                onChange={(e) => setTriagemTexto(e.target.value)}
+                rows={5}
+                placeholder="Ex.: cliente recebeu a máquina 220V no lugar da 127V"
+                style={{ width: '100%', marginTop: 4 }}
+              />
+            </label>
+            <div className="tools">
+              <label>
+                SKU
+                <input
+                  value={triagemSku}
+                  onChange={(e) => setTriagemSku(e.target.value.toUpperCase())}
+                  placeholder="opcional"
+                  style={{ marginLeft: 6 }}
+                />
+              </label>
+              <button className="primary" type="button" disabled={triagemBusy} onClick={classificarTriagem}>
+                {triagemBusy ? 'Lendo…' : 'Classificar relato'}
+              </button>
+            </div>
+            {triagem ? (
+              <div className="sugestao-box">
+                <h4>
+                  {triagem.causaNome} · {triagem.setor}
+                </h4>
+                <p>
+                  Fonte: {fonteLabel(triagem.fonte)} · confiança {Math.round(triagem.confianca * 100)}%
+                  {triagem.peca ? ` · peça: ${triagem.peca}` : ''}
+                </p>
+                {triagem.acao ? <p>{triagem.acao}</p> : null}
+                {triagem.explicacao ? <p className="muted">{triagem.explicacao}</p> : null}
+                {triagemExemplos.length ? (
+                  <ul className="plano-list">
+                    {triagemExemplos.map((r) => (
+                      <li key={r.id}>
+                        <b>#{r.reg}</b>
+                        <span className="muted">
+                          {' '}
+                          · {r.data || 'sem data'} · {r.cliente || 'sem cliente'}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                <button className="primary" type="button" onClick={usarTriagemNaFicha}>
+                  Abrir reclamação com esta sugestão
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         {user.perfil === 'master' && evolucao && !evolucao.ativa ? (
           <div className="card">
             <h3>Este é o ponto de partida</h3>
