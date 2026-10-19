@@ -21,10 +21,8 @@ export class WhatsappController {
     @Headers('apikey') apikey?: string,
   ) {
     const expected = process.env.EVOLUTION_WEBHOOK_SECRET;
-    const pol = await this.politica.get();
     const autorizado = !!expected && (secret === expected || apikey === process.env.EVOLUTION_API_KEY);
-    const recusar = pol.ativa ? !autorizado : Boolean(expected) && !autorizado;
-    if (recusar) {
+    if (expected && !autorizado) {
       throw new UnauthorizedException('Webhook não autorizado');
     }
     return this.whatsapp.handleWebhook(body);

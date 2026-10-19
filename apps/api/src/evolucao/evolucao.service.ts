@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { AuditoriaService } from '../auditoria.service';
 import { QualidadeService } from '../qualidade/qualidade.service';
@@ -39,16 +39,12 @@ export class EvolucaoService {
       limiarDescartar: pol.limiarDescartar,
       limiarSobrepor: pol.limiarSobrepor,
       guardarDivergencia: pol.guardarDivergencia,
+      webhookConfigurado: Boolean(process.env.EVOLUTION_WEBHOOK_SECRET?.trim()),
       comandosCliente: ['VOLTAR', 'CANCELAR', 'PONTO', 'RECOMECAR'],
     };
   }
 
   async ligar(user: AuthUser) {
-    if (!process.env.EVOLUTION_WEBHOOK_SECRET?.trim()) {
-      throw new BadRequestException(
-        'Defina EVOLUTION_WEBHOOK_SECRET antes de sair do ponto de partida.',
-      );
-    }
     await this.prisma.config.upsert({
       where: { chave: 'evolucao.ativa' },
       create: { chave: 'evolucao.ativa', valor: '1' },

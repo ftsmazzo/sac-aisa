@@ -99,6 +99,18 @@ type EvolucaoEstado = {
   ativa: boolean;
   pontoDeRetorno: { commit: string; ramo: string };
   comandosCliente: string[];
+  webhookConfigurado?: boolean;
+  limiarDescartar?: number;
+  limiarSobrepor?: number;
+};
+
+type Parecido = {
+  id: string;
+  reg: number;
+  data?: string | null;
+  sku?: string;
+  causa?: string;
+  solucao?: string;
 };
 
 type CartaoDecisao = {
@@ -346,6 +358,8 @@ export default function HomePage() {
   } | null>(null);
   const [evolucao, setEvolucao] = useState<EvolucaoEstado | null>(null);
   const [decisoes, setDecisoes] = useState<CartaoDecisao[]>([]);
+  const [parecidos, setParecidos] = useState<Parecido[]>([]);
+  const [sinais, setSinais] = useState<CartaoDecisao[]>([]);
   const [novoPlano, setNovoPlano] = useState({
     titulo: '',
     descricao: '',
@@ -564,6 +578,20 @@ export default function HomePage() {
   }, [tab, evolucao?.ativa, filtros.resp]);
 
   useEffect(() => {
+    if (tab !== 'qualidade' || !evolucao?.ativa) {
+      setSinais([]);
+      return;
+    }
+    const ac = new AbortController();
+    api<{ cartoes: CartaoDecisao[] }>('/evolucao/decisoes', { signal: ac.signal })
+      .then((r) => {
+        if (!ac.signal.aborted) setSinais(r.cartoes.filter((c) => c.tipo === 'seguranca'));
+      })
+      .catch(() => undefined);
+    return () => ac.abort();
+  }, [tab, evolucao?.ativa]);
+
+  useEffect(() => {
     if (tab !== 'qualidade') return;
     const ac = new AbortController();
     loadQualidade(ac.signal).catch((e) => {
@@ -648,6 +676,7 @@ export default function HomePage() {
   }
 
   function openNew() {
+    setParecidos([]);
     setEditId(null);
     setForm({ ...emptyForm, data: new Date().toISOString().slice(0, 10) });
     setSugestao(null);
@@ -657,6 +686,12 @@ export default function HomePage() {
   }
 
   function openEdit(r: Rec) {
+    setParecidos([]);
+    if (evolucao?.ativa) {
+      api<Parecido[]>(`/reclamacoes/${r.id}/parecidos`)
+        .then(setParecidos)
+        .catch(() => setParecidos([]));
+    }
     setEditId(r.id);
     setForm({
       ...emptyForm,
@@ -828,7 +863,7 @@ export default function HomePage() {
               onClick={async () => {
                 if (
                   !window.confirm(
-                    'Ligar a evolução? O WhatsApp passa a conferir o SKU no cadastro e a fila Decidir hoje aparece. Dá para voltar a este ponto.',
+                    'Ligar a fila Decidir hoje, os casos parecidos na ficha e a faixa de segurança na Qualidade? O SAC clássico continua sendo o ponto de partida. Dá para voltar.',
                   )
                 ) {
                   return;
@@ -842,7 +877,7 @@ export default function HomePage() {
                 }
               }}
             >
-              Ativar evolução
+              Ligar decisões do setor
             </button>
           )
         ) : null}
@@ -943,6 +978,24 @@ export default function HomePage() {
       ) : null}
 
       <main>
+        {user.perfil === 'master' && evolucao && !evolucao.ativa ? (
+          <div className="card">
+            <h3>Este é o ponto de partida</h3>
+            <p>
+              Reclamação, causa, custo e situação estão como sempre. O botão{' '}
+              <b>Ligar decisões do setor</b> abre a aba Decidir hoje, mostra na ficha até três casos
+              parecidos do mesmo SKU e causa, e separa na Qualidade o sinal de risco à pessoa. No
+              WhatsApp, <b>VOLTAR</b> já devolve o cliente ao menu. Se sair do combinado,{' '}
+              <b>Voltar ao ponto de partida</b> desliga tudo isso.
+            </p>
+            {evolucao.webhookConfigurado ? null : (
+              <p className="muted">
+                O segredo do webhook não está na API. A fila liga mesmo assim. A conferência de SKU no
+                WhatsApp entra junto; o webhook só exige segredo se a variável estiver definida.
+              </p>
+            )}
+          </div>
+        ) : null}
         {msg ? (
           <div className="card" style={{ background: 'var(--ok-bg)' }}>
             {msg}{' '}
@@ -1340,7 +1393,19 @@ export default function HomePage() {
             {decisoes.map((d) => (
               <div className="card" key={d.id}>
                 <h3>
-                  {d.titulo} <span className="tag aguard">{d.tipo}</span>
+                  {d.titulo}{' '}
+                  <span className="tag aguard">
+                    {{
+                      atraso: 'atraso',
+                      recorrencia: 'recorrência',
+                      ppm: 'PPM',
+                      plano_sem_efeito: 'plano sem efeito',
+                      custo: 'custo',
+                      outros: 'causa em aberto',
+                      seguranca: 'segurança',
+                      rascunho: 'rascunho',
+                    }[d.tipo] || d.tipo}
+                  </span>
                 </h3>
                 <p>{d.fato}</p>
                 <p className="muted">{d.acaoSugerida}</p>
@@ -1693,6 +1758,30 @@ export default function HomePage() {
                   </div>
                 </div>
 
+                {evolucao?.ativa ? (
+                  <div className="card" style={{ marginTop: 12 }}>
+                    <h3>Risco à pessoa</h3>
+                    <p className="muted">
+                      Isto não é um PPM do Inmetro. O Sinmac registra acidente de consumo no país, não
+                      reclamação da AISA. Aqui entram só causas do nosso catálogo que podem machucar:
+                      elétrico, voltagem, solda, cuba furada, avaria e manípulo quebrado. Prazo, anúncio e
+                      desistência ficam de fora.
+                    </p>
+                    {!sinais.length ? (
+                      <p className="muted">Nenhum caso aberto com esse sinal.</p>
+                    ) : (
+                      <ul className="plano-list">
+                        {sinais.map((s) => (
+                          <li key={s.id}>
+                            <b>{s.titulo}</b>
+                            <span className="muted"> · {s.setorResp || 'sem setor'} · {s.fato}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ) : null}
+
                 <div className="card" style={{ marginTop: 12 }}>
                   <h3>Planos abertos ({qualPainel.planosAbertos})</h3>
                   {!qualPainel.planos.length ? (
@@ -1874,6 +1963,53 @@ export default function HomePage() {
 
         {tab === 'gestao' ? (
           <>
+            {user.perfil === 'master' && evolucao?.ativa ? (
+              <div className="card" style={{ marginBottom: 12 }}>
+                <h3>Política da IA</h3>
+                <p className="muted">
+                  Abaixo do primeiro número, a regra do SAC vence o modelo. O modelo só passa por cima de
+                  uma causa já encontrada se passar do segundo número. Causa fora do catálogo vira outros.
+                  A IA não grava procedência, valor nem data da ação.
+                </p>
+                <form
+                  className="tools"
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    const fd = new FormData(e.currentTarget);
+                    await api('/gestao/config', {
+                      method: 'POST',
+                      json: {
+                        'ia.limiarDescartar': String(fd.get('descartar') || '0.55'),
+                        'ia.limiarSobrepor': String(fd.get('sobrepor') || '0.8'),
+                      },
+                    });
+                    const atual = await api<EvolucaoEstado>('/evolucao');
+                    setEvolucao(atual);
+                    setMsg('Limiares da IA gravados.');
+                  }}
+                >
+                  <label>
+                    Descartar modelo
+                    <input
+                      name="descartar"
+                      defaultValue={String(evolucao.limiarDescartar ?? 0.55)}
+                      style={{ marginLeft: 6, width: 70 }}
+                    />
+                  </label>
+                  <label>
+                    Modelo vence a regra
+                    <input
+                      name="sobrepor"
+                      defaultValue={String(evolucao.limiarSobrepor ?? 0.8)}
+                      style={{ marginLeft: 6, width: 70 }}
+                    />
+                  </label>
+                  <button className="primary" type="submit">
+                    Salvar limiares
+                  </button>
+                </form>
+              </div>
+            ) : null}
             <div className="subnav">
               {(
                 [
@@ -2255,6 +2391,23 @@ export default function HomePage() {
                   <input type="date" value={form.dataAcao} onChange={(e) => setF('dataAcao', e.target.value)} />
                 </div>
                 <div className="secao">Direcionamento</div>
+                {parecidos.length ? (
+                  <div className="sugestao-box">
+                    <h4>Casos parecidos deste SKU</h4>
+                    <ul className="plano-list">
+                      {parecidos.map((p) => (
+                        <li key={p.id}>
+                          <b>#{p.reg}</b>
+                          <span className="muted">
+                            {' '}
+                            · {p.data || 'sem data'} · {p.causa || 'sem causa'}
+                            {p.solucao ? ` · ${p.solucao}` : ''}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 <div className="sugestao-box">
                   <h4>Sugestão de causa e setor</h4>
                   <p className="help">

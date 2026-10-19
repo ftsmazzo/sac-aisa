@@ -321,4 +321,28 @@ export class ReclamacoesService {
       direcionamento: group((r) => String(r.setorResp)),
     };
   }
+
+  async parecidos(id: string) {
+    const pol = await this.politica.get();
+    if (!pol.ativa) return [];
+    const atual = await this.prisma.reclamacao.findUnique({ where: { id } });
+    if (!atual?.sku) return [];
+    const causaId = causaDe(atual).id;
+    const rows = await this.prisma.reclamacao.findMany({
+      where: { sku: { equals: atual.sku, mode: 'insensitive' }, id: { not: id } },
+      orderBy: [{ data: 'desc' }, { reg: 'desc' }],
+      take: 40,
+    });
+    return rows
+      .filter((r) => causaDe(r).id === causaId)
+      .slice(0, 3)
+      .map((r) => ({
+        id: r.id,
+        reg: r.reg,
+        data: r.data,
+        sku: r.sku,
+        causa: causaDe(r).nome,
+        solucao: r.solucao,
+      }));
+  }
 }
