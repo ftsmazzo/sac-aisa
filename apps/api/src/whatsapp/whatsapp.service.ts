@@ -2,7 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { EvolutionService } from './evolution.service';
 import { IaService } from '../ia/ia.service';
-import { situacao, DEV_LABEL, devDe } from '../domain-bridge';
+import { situacao, DEV_LABEL, devDe, comandoRetorno } from '../domain-bridge';
+import { PoliticaService } from '../evolucao/politica.service';
 import { AuditoriaService } from '../auditoria.service';
 
 type Ctx = {
@@ -10,10 +11,14 @@ type Ctx = {
   nome?: string;
   canal?: string;
   sku?: string;
+  produto?: string;
   uf?: string;
   relato?: string;
   protocolo?: string;
 };
+
+const MENU =
+  'Olá! Sou o assistente do SAC AISA.\n\nDigite *STATUS* + nº do registro/protocolo para consultar.\nOu envie *NOVA* para abrir uma reclamação.\nPara falar com humano, digite *ATENDENTE*.\nSe a conversa sair do rumo, digite *VOLTAR*.';
 
 @Injectable()
 export class WhatsappService {
@@ -24,6 +29,7 @@ export class WhatsappService {
     private evolution: EvolutionService,
     private ia: IaService,
     private auditoria: AuditoriaService,
+    private politica: PoliticaService,
   ) {}
 
   async handleWebhook(payload: unknown) {
@@ -47,6 +53,15 @@ export class WhatsappService {
     });
 
     const lower = texto.trim().toLowerCase();
+    if (comandoRetorno(lower)) {
+      await this.prisma.whatsappConversa.update({
+        where: { id: conversa.id },
+        data: { estado: 'inicio', contexto: {} },
+      });
+      await this.reply(conversa.id, telefone, `Voltamos ao início.\n\n${MENU}`);
+      return { retorno: true };
+    }
+
     if (['atendente', 'humano', 'operador'].some((k) => lower.includes(k))) {
       const reply =
         'Certo! Encaminhei para um atendente do SAC. Em horário comercial alguém retoma por aqui.';
@@ -67,15 +82,16 @@ export class WhatsappService {
         where: { id: conversa.id },
         data: { estado: 'coletar_nome', contexto: {} },
       });
-      await this.reply(
-        conversa.id,
-        telefone,
-        'Olá! Sou o assistente do SAC AISA.\n\nDigite *STATUS* + nº do registro/protocolo para consultar.\nOu envie *NOVA* para abrir uma reclamação.\nPara falar com humano, digite *ATENDENTE*.',
-      );
+      await this.reply(conversa.id, telefone, MENU);
       return { ok: true };
     }
 
-    if (lower === 'nova' || conversa.estado.startsWith('coletar') || conversa.estado === 'inicio') {
+    if (
+      lower === 'nova' ||
+      conversa.estado.startsWith('coletar') ||
+      conversa.estado === 'confirmar_sku' ||
+      conversa.estado === 'inicio'
+    ) {
       return this.fluxoNova(conversa.id, telefone, texto, conversa.estado, (conversa.contexto || {}) as Ctx);
     }
 
@@ -186,8 +202,34 @@ export class WhatsappService {
       await this.reply(conversaId, telefone, 'Informe o *SKU* ou nome do produto.');
       return { ok: true };
     }
-    if (estado === 'coletar_sku') {
-      ctx.sku = t.toUpperCase();
+    if (estado === 'coletar_sku' || estado === 'confirmar_sku') {
+      const pol = await this.politica.get();
+      if (!pol.ativa) {
+        ctx.sku = t.toUpperCase();
+        ctx.produto = ctx.sku;
+      } else if (estado === 'confirmar_sku' && t.toLowerCase() === 'confirma') {
+        ctx.produto = ctx.sku;
+      } else {
+        const cod = t.toUpperCase();
+        const prod = await this.prisma.produto.findFirst({
+          where: { cod: { equals: cod, mode: 'insensitive' } },
+        });
+        if (!prod) {
+          ctx.sku = cod;
+          await this.prisma.whatsappConversa.update({
+            where: { id: conversaId },
+            data: { estado: 'confirmar_sku', contexto: ctx },
+          });
+          await this.reply(
+            conversaId,
+            telefone,
+            `Não achei *${cod}* no cadastro. Digite outro código ou *CONFIRMA* para o SAC conferir. *VOLTAR* reinicia.`,
+          );
+          return { ok: true, skuLivre: true };
+        }
+        ctx.sku = prod.cod;
+        ctx.produto = prod.produto;
+      }
       await this.prisma.whatsappConversa.update({
         where: { id: conversaId },
         data: { estado: 'coletar_uf', contexto: ctx },
@@ -206,6 +248,30 @@ export class WhatsappService {
     }
     if (estado === 'coletar_relato') {
       ctx.relato = t;
+      const pol = await this.politica.get();
+      if (pol.ativa) {
+        await this.prisma.whatsappConversa.update({
+          where: { id: conversaId },
+          data: { estado: 'coletar_foto', contexto: ctx },
+        });
+        await this.reply(
+          conversaId,
+          telefone,
+          'Se tiver foto da avaria, envie agora. Se não tiver, digite *PULAR*. *VOLTAR* reinicia.',
+        );
+        return { ok: true };
+      }
+      return this.abrirRascunho(conversaId, telefone, ctx);
+    }
+    if (estado === 'coletar_foto') {
+      return this.abrirRascunho(conversaId, telefone, ctx);
+    }
+
+    await this.reply(conversaId, telefone, 'Digite *NOVA* para recomeçar ou *VOLTAR* para o início.');
+    return { ok: true };
+  }
+
+  private async abrirRascunho(conversaId: string, telefone: string, ctx: Ctx) {
       const classif = await this.ia.classificar({
         reclamacao: ctx.relato,
         sku: ctx.sku,
@@ -221,7 +287,7 @@ export class WhatsappService {
           cliente: ctx.nome || '',
           canal: ctx.canal || 'WHATSAPP',
           sku: ctx.sku || '',
-          produto: ctx.sku || '',
+          produto: ctx.produto || ctx.sku || '',
           uf: ctx.uf || '',
           reclamacao: ctx.relato || '',
           causaId: classif.causaId,
@@ -254,9 +320,5 @@ export class WhatsappService {
         `Rascunho *#${created.reg}* criado para o SAC confirmar.\nCausa sugerida: ${classif.causaNome} (${classif.fonte}).\nSetor: ${classif.setor}.\n\nDigite *STATUS ${created.reg}* para acompanhar.`,
       );
       return { ok: true, reg: created.reg };
-    }
-
-    await this.reply(conversaId, telefone, 'Digite *NOVA* para recomeçar.');
-    return { ok: true };
   }
 }

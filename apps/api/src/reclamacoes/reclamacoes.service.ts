@@ -10,12 +10,14 @@ import {
 } from '../domain-bridge';
 import { AuditoriaService } from '../auditoria.service';
 import { AuthUser } from '../auth/auth.types';
+import { PoliticaService } from '../evolucao/politica.service';
 
 @Injectable()
 export class ReclamacoesService {
   constructor(
     private prisma: PrismaService,
     private auditoria: AuditoriaService,
+    private politica: PoliticaService,
   ) {}
 
   async overrides(): Promise<Record<string, Partial<CausaDef>>> {
@@ -210,6 +212,12 @@ export class ReclamacoesService {
     mapped.situacao = situacao(merged as never);
     mapped.alteradoPor = user.login;
     const updated = await this.prisma.reclamacao.update({ where: { id }, data: mapped });
+    const pol = await this.politica.get();
+    const causaMudou =
+      pol.ativa &&
+      pol.guardarDivergencia &&
+      mapped.causaId !== undefined &&
+      String(mapped.causaId) !== String(atual.causaId || '');
     await this.auditoria.registrar({
       user: user.login,
       nome: user.nome,
@@ -217,6 +225,9 @@ export class ReclamacoesService {
       acao: 'editou',
       alvo: `Reclamação #${updated.reg}`,
       recId: updated.id,
+      extra: causaMudou
+        ? { causaSugerida: atual.causaId, causaFinal: String(mapped.causaId), fonte: 'correcao_humana' }
+        : undefined,
     });
     return this.get(updated.id);
   }

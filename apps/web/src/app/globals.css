@@ -38,6 +38,11 @@ button.primary {
   background: var(--azul);
   border-color: var(--azul);
   color: #fff;
+}
+button.retorno {
+  border-color: var(--alerta);
+  color: var(--alerta);
+  background: var(--alerta-bg);
   font-weight: 600;
 }
 button.danger { color: var(--bad); border-color: #e3b9b5; }

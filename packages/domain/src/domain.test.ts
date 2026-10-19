@@ -7,6 +7,10 @@ import {
   classificar,
   detectarPeca,
   avaliarAlertasReclamacao,
+  comandoRetorno,
+  evolucaoAtivaDe,
+  politicaDe,
+  sinalSeguranca,
 } from './index';
 
 test('situacao: resolvida quando há dataAcao', () => {
@@ -62,4 +66,25 @@ test('alerta aguardando dias', () => {
     '2026-01-15',
   );
   assert.ok(tipos.includes('AGUARDANDO_DIAS'));
+});
+
+test('comando de retorno reconhece voltar e ignora texto livre', () => {
+  assert.equal(comandoRetorno(' VOLTAR '), true);
+  assert.equal(comandoRetorno('recomeçar'), true);
+  assert.equal(comandoRetorno('quero voltar o produto'), false);
+});
+
+test('evolução desligada reproduz a política clássica', () => {
+  const p = politicaDe({});
+  assert.equal(p.ativa, false);
+  assert.equal(p.limiarDescartar, 0.55);
+  assert.equal(p.limiarSobrepor, 0.8);
+  assert.equal(p.guardarDivergencia, false);
+  assert.equal(evolucaoAtivaDe('0'), false);
+  assert.equal(evolucaoAtivaDe('1'), true);
+});
+
+test('sinal de segurança usa só causas do catálogo', () => {
+  assert.equal(sinalSeguranca('voltagem'), true);
+  assert.equal(sinalSeguranca('prazo'), false);
 });
