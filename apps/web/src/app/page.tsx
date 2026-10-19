@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, clearSession, downloadAuthed, getUser, uploadFile, uploadUrl } from '@/lib/api';
 
-type Tab = 'kpis' | 'lista' | 'alertas' | 'qualidade' | 'gestao' | 'dados';
+type Tab = 'kpis' | 'lista' | 'alertas' | 'decisoes' | 'qualidade' | 'gestao' | 'dados';
 
 type Rec = {
   id: string;
@@ -94,6 +94,23 @@ const emptyFiltros: Filtros = {
 function nomeCausaLabel(causas: { id: string; nome: string }[], id: string) {
   return causas.find((c) => c.id === id)?.nome || id;
 }
+
+type EvolucaoEstado = {
+  ativa: boolean;
+  pontoDeRetorno: { commit: string; ramo: string };
+  comandosCliente: string[];
+};
+
+type CartaoDecisao = {
+  id: string;
+  tipo: string;
+  setorResp: string;
+  titulo: string;
+  fato: string;
+  acaoSugerida: string;
+  reclamacaoId?: string;
+  sku?: string;
+};
 
 type QualidadePainel = {
   limitePpm: number;
@@ -327,6 +344,8 @@ export default function HomePage() {
     avisos: string[];
     avisosTotal: number;
   } | null>(null);
+  const [evolucao, setEvolucao] = useState<EvolucaoEstado | null>(null);
+  const [decisoes, setDecisoes] = useState<CartaoDecisao[]>([]);
   const [novoPlano, setNovoPlano] = useState({
     titulo: '',
     descricao: '',
@@ -471,6 +490,7 @@ export default function HomePage() {
     }
     setUser(u);
     api<Causa[]>('/gestao/causas').then(setCausas).catch(() => undefined);
+    api<EvolucaoEstado>('/evolucao').then(setEvolucao).catch(() => undefined);
   }, [router]);
 
   useEffect(() => {
@@ -528,6 +548,20 @@ export default function HomePage() {
     },
     [tab, filtros.de, filtros.ate, filtros.setor, filtros.resp, filtros.sku],
   );
+
+  useEffect(() => {
+    if (tab !== 'decisoes' || !evolucao?.ativa) return;
+    const ac = new AbortController();
+    const q = filtros.resp ? `?resp=${encodeURIComponent(filtros.resp)}` : '';
+    api<{ ativa: boolean; cartoes: CartaoDecisao[] }>(`/evolucao/decisoes${q}`, { signal: ac.signal })
+      .then((r) => {
+        if (!ac.signal.aborted) setDecisoes(r.cartoes);
+      })
+      .catch((e) => {
+        if (e?.name !== 'AbortError') setMsg(e.message);
+      });
+    return () => ac.abort();
+  }, [tab, evolucao?.ativa, filtros.resp]);
 
   useEffect(() => {
     if (tab !== 'qualidade') return;
@@ -763,6 +797,55 @@ export default function HomePage() {
         <span className="titulo">SAC</span>
         <span className="muted">AISA em nuvem · Evolution + Postgres</span>
         <span className="spacer" />
+        {user.perfil === 'master' ? (
+          evolucao?.ativa ? (
+            <button
+              className="small retorno"
+              onClick={async () => {
+                if (
+                  !window.confirm(
+                    'Voltar ao SAC clássico? A fila Decidir hoje some. Conversas presas no fluxo novo reiniciam no menu. VOLTAR no WhatsApp continua valendo.',
+                  )
+                ) {
+                  return;
+                }
+                try {
+                  const r = await api<EvolucaoEstado>('/evolucao/voltar', { method: 'POST' });
+                  setEvolucao(r);
+                  setDecisoes([]);
+                  setTab('kpis');
+                  setMsg('Ponto de partida restaurado.');
+                } catch (e) {
+                  setMsg(e instanceof Error ? e.message : 'Não foi possível voltar');
+                }
+              }}
+            >
+              Voltar ao ponto de partida
+            </button>
+          ) : (
+            <button
+              className="small"
+              onClick={async () => {
+                if (
+                  !window.confirm(
+                    'Ligar a evolução? O WhatsApp passa a conferir o SKU no cadastro e a fila Decidir hoje aparece. Dá para voltar a este ponto.',
+                  )
+                ) {
+                  return;
+                }
+                try {
+                  const r = await api<EvolucaoEstado>('/evolucao/ligar', { method: 'POST' });
+                  setEvolucao(r);
+                  setMsg('Evolução ligada. No WhatsApp, VOLTAR reinicia o atendimento.');
+                } catch (e) {
+                  setMsg(e instanceof Error ? e.message : 'Não foi possível ligar');
+                }
+              }}
+            >
+              Ativar evolução
+            </button>
+          )
+        ) : null}
         <span>
           <b>{user.nome}</b> · {user.perfil}
         </span>
@@ -783,10 +866,11 @@ export default function HomePage() {
             ['kpis', 'KPIs'],
             ['lista', 'Reclamações'],
             ['alertas', 'Alertas'],
+            ...(evolucao?.ativa ? [['decisoes', 'Decidir hoje']] : []),
             ['qualidade', 'Qualidade'],
             ['gestao', 'Gestão'],
             ['dados', 'Dados'],
-          ] as const
+          ] as [Tab, string][]
         ).map(([id, label]) => (
           <button key={id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}>
             {label}
@@ -1244,6 +1328,33 @@ export default function HomePage() {
               </div>
             ))}
             {!alertas.length ? <div className="card muted">Nenhum alerta aberto.</div> : null}
+          </>
+        ) : null}
+
+        {tab === 'decisoes' && evolucao?.ativa ? (
+          <>
+            <p className="kpi-insight">
+              Fila do setor responsável. Os números vêm do banco. A ação sugerida é a do catálogo de causas.
+              {filtros.resp ? ` Filtro: ${filtros.resp}.` : ' Use o filtro Resolve para ver um setor.'}
+            </p>
+            {decisoes.map((d) => (
+              <div className="card" key={d.id}>
+                <h3>
+                  {d.titulo} <span className="tag aguard">{d.tipo}</span>
+                </h3>
+                <p>{d.fato}</p>
+                <p className="muted">{d.acaoSugerida}</p>
+                <div className="tools">
+                  {d.setorResp ? <span className="tag trat">{d.setorResp}</span> : null}
+                  {d.sku ? (
+                    <button type="button" className="small" onClick={() => toggleFiltro({ sku: d.sku }, true)}>
+                      Ver SKU {d.sku}
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+            {!decisoes.length ? <div className="card muted">Nenhuma decisão aberta neste filtro.</div> : null}
           </>
         ) : null}
 

@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { PoliticaService } from '../evolucao/politica.service';
 import {
   CAUSA_POR_ID,
   CAUSAS,
@@ -32,6 +33,8 @@ type LlmProvider = {
 @Injectable()
 export class IaService {
   private readonly log = new Logger(IaService.name);
+
+  constructor(private politica: PoliticaService) {}
 
   private resolveProvider(): LlmProvider | null {
     const openrouter = process.env.OPENROUTER_API_KEY?.trim();
@@ -100,16 +103,17 @@ export class IaService {
     const legado = this.classificarLegado(r);
     const provider = this.resolveProvider();
     if (!provider) return legado;
+    const pol = await this.politica.get();
 
     try {
       const llm = await this.classificarLlm(r, provider);
-      if (!llm || llm.confianca < 0.55) {
+      if (!llm || llm.confianca < pol.limiarDescartar) {
         return {
           ...legado,
           explicacao: `${legado.explicacao} ${provider.nome} abaixo do limiar; mantido regras do SAC.`,
         };
       }
-      if (legado.causaId !== 'outros' && llm.causaId !== legado.causaId && llm.confianca < 0.8) {
+      if (legado.causaId !== 'outros' && llm.causaId !== legado.causaId && llm.confianca < pol.limiarSobrepor) {
         return {
           ...legado,
           explicacao: `Regras sugeriram "${legado.causaNome}"; ${provider.nome} sugeriu "${llm.causaNome}" (${Math.round(llm.confianca * 100)}%). Mantido regras.`,

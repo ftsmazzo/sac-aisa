@@ -14,9 +14,15 @@ import {
   DEFAULT_ALERT_CONFIG,
   DEV_LABEL,
   devDe,
+  comandoRetorno,
+  politicaDe,
+  sinalSeguranca,
+  PONTO_DE_RETORNO,
+  ESTADOS_WHATSAPP_CLASSICOS,
   type AlertConfig,
   type CausaDef,
   type ReclamacaoLike,
+  type PoliticaEvolucao,
 } from '@sac-aisa/domain';
 
 export {
@@ -35,9 +41,14 @@ export {
   DEFAULT_ALERT_CONFIG,
   DEV_LABEL,
   devDe,
+  comandoRetorno,
+  politicaDe,
+  sinalSeguranca,
+  PONTO_DE_RETORNO,
+  ESTADOS_WHATSAPP_CLASSICOS,
 };
 
-export type { AlertConfig, CausaDef, ReclamacaoLike };
+export type { AlertConfig, CausaDef, ReclamacaoLike, PoliticaEvolucao };
 
 export function enrichReclamacao<T extends ReclamacaoLike>(
   r: T,

@@ -472,3 +472,76 @@ export function avaliarAlertasReclamacao(
   }
   return out;
 }
+
+/** Commit e ramo que reproduzem o SAC antes da evolução. */
+export const PONTO_DE_RETORNO = {
+  commit: 'dcec3884d57cc20389ab4ce3a8f21174ad17c722',
+  ramo: 'ponto-de-retorno',
+} as const;
+
+export const ESTADOS_WHATSAPP_CLASSICOS = [
+  'inicio',
+  'coletar_nome',
+  'coletar_canal',
+  'coletar_sku',
+  'coletar_uf',
+  'coletar_relato',
+  'handoff',
+] as const;
+
+/** Palavras que devolvem o cliente ao menu, em qualquer passo. */
+export const COMANDOS_RETORNO = [
+  'voltar',
+  'cancelar',
+  'ponto',
+  'recomecar',
+  'recomeçar',
+  'recomece',
+  'recomeça',
+] as const;
+
+export function comandoRetorno(texto: string): boolean {
+  const t = clean(texto).toLowerCase();
+  return (COMANDOS_RETORNO as readonly string[]).includes(t);
+}
+
+export function evolucaoAtivaDe(valor?: string | null): boolean {
+  const v = clean(valor).toLowerCase();
+  return v === '1' || v === 'true' || v === 'sim';
+}
+
+export interface PoliticaEvolucao {
+  ativa: boolean;
+  limiarDescartar: number;
+  limiarSobrepor: number;
+  guardarDivergencia: boolean;
+}
+
+/** Desligada, os limiares são os mesmos números que já estavam no código. */
+export function politicaDe(m: Record<string, string | undefined | null>): PoliticaEvolucao {
+  const ativa = evolucaoAtivaDe(m['evolucao.ativa']);
+  if (!ativa) {
+    return { ativa: false, limiarDescartar: 0.55, limiarSobrepor: 0.8, guardarDivergencia: false };
+  }
+  const descartar = Number(m['ia.limiarDescartar']);
+  const sobrepor = Number(m['ia.limiarSobrepor']);
+  return {
+    ativa: true,
+    limiarDescartar: descartar > 0 && descartar < 1 ? descartar : 0.55,
+    limiarSobrepor: sobrepor > 0 && sobrepor <= 1 ? sobrepor : 0.8,
+    guardarDivergencia: m['ia.guardarDivergencia'] !== '0',
+  };
+}
+
+export const CAUSAS_SEGURANCA = [
+  'eletrico',
+  'voltagem',
+  'solda',
+  'cuba_furada',
+  'avaria',
+  'manipulo',
+] as const;
+
+export function sinalSeguranca(causaId?: string | null): boolean {
+  return (CAUSAS_SEGURANCA as readonly string[]).includes(String(causaId || ''));
+}

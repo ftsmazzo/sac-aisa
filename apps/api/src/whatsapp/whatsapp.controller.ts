@@ -1,13 +1,16 @@
-import { Body, Controller, Headers, Post, UnauthorizedException } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Headers, Post, Req, UnauthorizedException } from '@nestjs/common';
 import { Public } from '../auth/auth.guard';
+import { AuthUser } from '../auth/auth.types';
 import { WhatsappService } from './whatsapp.service';
 import { EvolutionService } from './evolution.service';
+import { PoliticaService } from '../evolucao/politica.service';
 
 @Controller('whatsapp')
 export class WhatsappController {
   constructor(
     private whatsapp: WhatsappService,
     private evolution: EvolutionService,
+    private politica: PoliticaService,
   ) {}
 
   @Public()
@@ -18,7 +21,10 @@ export class WhatsappController {
     @Headers('apikey') apikey?: string,
   ) {
     const expected = process.env.EVOLUTION_WEBHOOK_SECRET;
-    if (expected && secret !== expected && apikey !== process.env.EVOLUTION_API_KEY) {
+    const pol = await this.politica.get();
+    const autorizado = !!expected && (secret === expected || apikey === process.env.EVOLUTION_API_KEY);
+    const recusar = pol.ativa ? !autorizado : Boolean(expected) && !autorizado;
+    if (recusar) {
       throw new UnauthorizedException('Webhook não autorizado');
     }
     return this.whatsapp.handleWebhook(body);
@@ -31,7 +37,11 @@ export class WhatsappController {
   }
 
   @Post('test-send')
-  testSend(@Body() body: { telefone: string; texto: string }) {
+  async testSend(@Body() body: { telefone: string; texto: string }, @Req() req: { user: AuthUser }) {
+    const pol = await this.politica.get();
+    if (pol.ativa && req.user.perfil !== 'master') {
+      throw new ForbiddenException('Com a evolução ligada, o envio de teste fica só com o perfil master.');
+    }
     return this.evolution.sendText(body.telefone, body.texto || 'Teste SAC AISA');
   }
 }
