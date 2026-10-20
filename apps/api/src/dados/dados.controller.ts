@@ -52,6 +52,7 @@ export class DadosController {
     if (body.limpar !== false) {
       await this.prisma.alerta.deleteMany();
       await this.prisma.reclamacaoFoto.deleteMany();
+      await this.prisma.reclamacaoCausa.deleteMany();
       await this.prisma.reclamacao.deleteMany();
     }
 
@@ -102,11 +103,34 @@ export class DadosController {
         alteradoPor: String(x.alteradoPor || 'import'),
       };
       const sit = situacao(data);
-      await this.prisma.reclamacao.upsert({
+      const saved = await this.prisma.reclamacao.upsert({
         where: { reg: data.reg },
         create: { ...data, situacao: sit },
         update: { ...data, situacao: sit },
       });
+      const causasExtra = Array.isArray(x.causas)
+        ? (x.causas as { causaId?: string; id?: string; primaria?: boolean; ordem?: number }[])
+        : [];
+      const idsFromExtra = causasExtra
+        .map((c) => String(c.causaId || c.id || '').trim())
+        .filter(Boolean);
+      const ids =
+        idsFromExtra.length > 0
+          ? [...new Set(idsFromExtra)].slice(0, 5)
+          : data.causaId
+            ? [data.causaId]
+            : [];
+      if (ids.length) {
+        await this.prisma.reclamacaoCausa.deleteMany({ where: { reclamacaoId: saved.id } });
+        await this.prisma.reclamacaoCausa.createMany({
+          data: ids.map((causaId, ordem) => ({
+            reclamacaoId: saved.id,
+            causaId,
+            primaria: causaId === (data.causaId || ids[0]),
+            ordem,
+          })),
+        });
+      }
       ok++;
     }
 
@@ -196,7 +220,9 @@ export class DadosController {
   @Post('exportar-backup')
   async exportar() {
     const [regs, usuarios, auditoria, depara, regras, base] = await Promise.all([
-      this.prisma.reclamacao.findMany({ include: { fotos: true } }),
+      this.prisma.reclamacao.findMany({
+        include: { fotos: true, causas: { orderBy: { ordem: 'asc' } } },
+      }),
       this.prisma.usuario.findMany(),
       this.prisma.auditoria.findMany({ orderBy: { ts: 'desc' }, take: 5000 }),
       this.prisma.skuDepara.findMany(),

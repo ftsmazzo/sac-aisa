@@ -325,10 +325,20 @@ export const CAUSA_POR_ID: Record<string, CausaDef> = Object.fromEntries(
 );
 
 export function classificar(r: ReclamacaoLike): string {
+  return classificarTodas(r, 1)[0] || 'outros';
+}
+
+/** Todas as causas que batem no texto (máx. 5). Útil para amassado + elétrico etc. */
+export function classificarTodas(r: ReclamacaoLike, max = 5): string[] {
   const L = stripAcc(U(r.laudo));
   const T = stripAcc(U(`${r.reclamacao || ''} ${r.solucao || ''}`));
-  for (const c of CAUSAS) if (c.t(L, T)) return c.id;
-  return 'outros';
+  const ids: string[] = [];
+  for (const c of CAUSAS) {
+    if (c.id === 'outros') continue;
+    if (c.t(L, T)) ids.push(c.id);
+    if (ids.length >= max) break;
+  }
+  return ids.length ? ids : ['outros'];
 }
 
 const PECAS: [string, RegExp][] = [

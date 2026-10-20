@@ -110,11 +110,19 @@ export class ReclamacoesService {
       orderBy,
       take: takeSql,
       skip: precisaFiltroDerivado ? 0 : skip,
+      include: { causas: { orderBy: { ordem: 'asc' } } },
     });
 
     rows = rows.map((r) => ({ ...r, situacao: situacao(r) }));
 
-    if (query.causa) rows = rows.filter((r) => causaDe(r, overrides).id === query.causa);
+    if (query.causa) {
+      rows = rows.filter((r) => {
+        const ids = r.causas?.length
+          ? r.causas.map((c) => c.causaId)
+          : [causaDe(r, overrides).id];
+        return ids.includes(query.causa!);
+      });
+    }
     if (query.resp) {
       rows = rows.filter((r) => {
         const manual = (r.setorRespManual || '').trim();
@@ -142,11 +150,48 @@ export class ReclamacoesService {
   async get(id: string) {
     const r = await this.prisma.reclamacao.findUnique({
       where: { id },
-      include: { fotos: true },
+      include: { fotos: true, causas: { orderBy: { ordem: 'asc' } } },
     });
     if (!r) throw new NotFoundException('Reclamação não encontrada');
     const overrides = await this.overrides();
     return enrichReclamacao({ ...r, situacao: situacao(r) }, overrides);
+  }
+
+  /** Sincroniza motivos (máx. 5). Mantém causaId = primária. */
+  private async syncCausas(reclamacaoId: string, body: Record<string, unknown>, fallbackCausaId?: string) {
+    let ids: string[] = [];
+    if (Array.isArray(body.causasIds) && body.causasIds.length > 0) {
+      ids = body.causasIds.map((x) => String(x || '').trim()).filter(Boolean);
+    } else if (body.causaId !== undefined && String(body.causaId || '').trim()) {
+      ids = [String(body.causaId).trim()];
+    } else if (fallbackCausaId) {
+      ids = [fallbackCausaId];
+    } else {
+      return; // nada a sincronizar
+    }
+    ids = [...new Set(ids.filter((id) => !!CAUSA_POR_ID[id]))].slice(0, 5);
+    if (!ids.length) return;
+    const primaria =
+      (typeof body.causaId === 'string' && ids.includes(body.causaId) && body.causaId) ||
+      ids[0];
+    const causaManual =
+      body.causaManual !== undefined ? !!body.causaManual : true;
+
+    await this.prisma.$transaction([
+      this.prisma.reclamacaoCausa.deleteMany({ where: { reclamacaoId } }),
+      this.prisma.reclamacaoCausa.createMany({
+        data: ids.map((causaId, ordem) => ({
+          reclamacaoId,
+          causaId,
+          primaria: causaId === primaria,
+          ordem,
+        })),
+      }),
+      this.prisma.reclamacao.update({
+        where: { id: reclamacaoId },
+        data: { causaId: primaria, causaManual },
+      }),
+    ]);
   }
 
   private mapBody(body: Record<string, unknown>, partial = false) {
@@ -217,6 +262,7 @@ export class ReclamacoesService {
     };
     draft.situacao = situacao(draft as never);
     const created = await this.prisma.reclamacao.create({ data: draft });
+    await this.syncCausas(created.id, body, String(created.causaId || ''));
     await this.auditoria.registrar({
       user: user.login,
       nome: user.nome,
@@ -236,6 +282,9 @@ export class ReclamacoesService {
     mapped.situacao = situacao(merged as never);
     mapped.alteradoPor = user.login;
     const updated = await this.prisma.reclamacao.update({ where: { id }, data: mapped });
+    if (body.causasIds !== undefined || body.causaId !== undefined) {
+      await this.syncCausas(updated.id, body, String(updated.causaId || ''));
+    }
     const pol = await this.politica.get();
     const causaMudou =
       pol.ativa &&

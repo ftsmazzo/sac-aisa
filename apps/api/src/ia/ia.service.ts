@@ -4,6 +4,7 @@ import {
   CAUSA_POR_ID,
   CAUSAS,
   classificar,
+  classificarTodas,
   detectarPeca,
   causaDe,
   type ReclamacaoLike,
@@ -20,6 +21,9 @@ export interface ClassificacaoResult {
   laudoSugerido?: string;
   solucaoRascunho?: string;
   explicacao?: string;
+  /** Motivos adicionais detectados no texto (além da causa principal). */
+  causasIds?: string[];
+  acoes?: { causaId: string; nome: string; setor: string; acao: string }[];
 }
 
 type LlmProvider = {
@@ -69,9 +73,16 @@ export class IaService {
   }
 
   classificarLegado(r: ReclamacaoLike): ClassificacaoResult {
-    const causaId = r.causaManual && r.causaId ? r.causaId : classificar(r);
+    const ids =
+      r.causaManual && r.causaId ? [String(r.causaId)] : classificarTodas(r, 5);
+    const causaId = ids[0] || classificar(r);
     const causa = causaDe({ ...r, causaId, causaManual: !!r.causaManual });
     const peca = detectarPeca(r);
+    const causasIds = [...new Set(ids.filter((id) => !!CAUSA_POR_ID[id]))].slice(0, 5);
+    const acoes = causasIds.map((id) => {
+      const c = causaDe({ ...r, causaId: id, causaManual: true });
+      return { causaId: c.id, nome: c.nome, setor: c.setor, acao: c.acao };
+    });
     return {
       causaId: causa.id,
       causaNome: causa.nome,
@@ -80,7 +91,12 @@ export class IaService {
       peca,
       confianca: causa.id === 'outros' ? 0.35 : 0.78,
       fonte: 'legado',
-      explicacao: 'Sugestão pelas regras do SAC (palavras-chave no laudo/reclamação/solução).',
+      explicacao:
+        causasIds.length > 1
+          ? `Regras do SAC detectaram ${causasIds.length} motivos. Cada um traz a própria ação sugerida.`
+          : 'Sugestão pelas regras do SAC (palavras-chave no laudo/reclamação/solução).',
+      causasIds,
+      acoes,
     };
   }
 
@@ -118,8 +134,17 @@ export class IaService {
           explicacao: `Regras sugeriram "${legado.causaNome}"; ${provider.nome} sugeriu "${llm.causaNome}" (${Math.round(llm.confianca * 100)}%). Mantido regras.`,
         };
       }
+      const causasIds = [
+        ...new Set([llm.causaId, ...(legado.causasIds || [])].filter((id) => !!CAUSA_POR_ID[id])),
+      ].slice(0, 5);
+      const acoes = causasIds.map((id) => {
+        const c = causaDe({ ...r, causaId: id, causaManual: true });
+        return { causaId: c.id, nome: c.nome, setor: c.setor, acao: c.acao };
+      });
       return {
         ...llm,
+        causasIds,
+        acoes,
         explicacao: llm.explicacao || `Classificado via ${provider.nome} (${provider.model}).`,
       };
     } catch (e) {

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, clearSession, downloadAuthed, getUser, uploadFile, uploadUrl } from '@/lib/api';
+import { fichaHTML, imprimirHtml, montarFichas, montarRelSetor } from '@/lib/print';
 
 type Tab = 'triagem' | 'kpis' | 'lista' | 'alertas' | 'decisoes' | 'qualidade' | 'gestao' | 'dados' | 'admin';
 
@@ -46,6 +47,8 @@ type Rec = {
   tempoDias?: number | null;
   setorResp?: string;
   causa?: { id: string; nome: string; setor: string; acao: string };
+  causas?: { id: string; nome: string; setor: string; acao: string }[];
+  acoes?: { causaId: string; nome: string; setor: string; acao: string }[];
 };
 
 type KpiGrupo = { k: string; n: number; custo: number };
@@ -296,6 +299,7 @@ const emptyForm = {
   devolucao: 'NA',
   dataRecebimento: '',
   causaId: '',
+  causasIds: [] as string[],
   causaManual: false,
   obsCausa: '',
   peca: '',
@@ -339,7 +343,10 @@ export default function HomePage() {
     fonte: string;
     explicacao?: string;
     acao?: string;
+    causasIds?: string[];
+    acoes?: { causaId: string; nome: string; setor: string; acao: string }[];
   } | null>(null);
+  const [selecionadas, setSelecionadas] = useState<Set<string>>(new Set());
   const [msg, setMsg] = useState('');
   const [gestaoSub, setGestaoSub] = useState<'usuarios' | 'regras' | 'produtos' | 'auditoria'>('usuarios');
   const [gestaoData, setGestaoData] = useState<unknown[]>([]);
@@ -377,6 +384,8 @@ export default function HomePage() {
     confianca: number;
     fonte: string;
     explicacao?: string;
+    causasIds?: string[];
+    acoes?: { causaId: string; nome: string; setor: string; acao: string }[];
   } | null>(null);
   const [triagemExemplos, setTriagemExemplos] = useState<Rec[]>([]);
   const [triagemBusy, setTriagemBusy] = useState(false);
@@ -799,6 +808,11 @@ export default function HomePage() {
       devolucao: r.devolucao || 'NA',
       dataRecebimento: r.dataRecebimento || '',
       causaId: r.causaId || r.causa?.id || '',
+      causasIds: r.causas?.length
+        ? r.causas.map((c) => c.id)
+        : r.causaId || r.causa?.id
+          ? [r.causaId || r.causa!.id]
+          : [],
       causaManual: !!r.causaManual,
       obsCausa: r.obsCausa || '',
       peca: r.peca || '',
@@ -825,6 +839,8 @@ export default function HomePage() {
       explicacao?: string;
       acao?: string;
       laudoSugerido?: string;
+      causasIds?: string[];
+      acoes?: { causaId: string; nome: string; setor: string; acao: string }[];
     }>('/ia/classificar', {
       method: 'POST',
       json: {
@@ -835,9 +851,11 @@ export default function HomePage() {
         produto: form.produto,
       },
     });
+    const ids = s.causasIds?.length ? s.causasIds : [s.causaId];
     setForm((f) => ({
       ...f,
-      causaId: s.causaId,
+      causaId: ids[0] || s.causaId,
+      causasIds: ids.slice(0, 5),
       causaManual: false,
       peca: s.peca || f.peca,
       laudo: f.laudo || s.laudoSugerido || '',
@@ -850,6 +868,23 @@ export default function HomePage() {
       fonte: s.fonte,
       explicacao: s.explicacao,
       acao: s.acao,
+      causasIds: ids,
+      acoes: s.acoes,
+    });
+  }
+
+  function toggleCausaForm(id: string) {
+    setForm((f) => {
+      const cur = f.causasIds || [];
+      const has = cur.includes(id);
+      let next = has ? cur.filter((x) => x !== id) : [...cur, id].slice(0, 5);
+      if (!next.length && id) next = [id];
+      return {
+        ...f,
+        causasIds: next,
+        causaId: next[0] || '',
+        causaManual: true,
+      };
     });
   }
 
@@ -864,9 +899,15 @@ export default function HomePage() {
   }
 
   async function salvar() {
+    const causasIds = (form.causasIds?.length ? form.causasIds : form.causaId ? [form.causaId] : []).slice(
+      0,
+      5,
+    );
     const payload = {
       ...form,
-      causaManual: !!form.causaId,
+      causaId: causasIds[0] || form.causaId || '',
+      causasIds,
+      causaManual: causasIds.length > 0,
       freteEnvio: Number(form.freteEnvio) || 0,
       freteRetorno: Number(form.freteRetorno) || 0,
       valorPeca: Number(form.valorPeca) || 0,
@@ -910,6 +951,8 @@ export default function HomePage() {
         confianca: number;
         fonte: string;
         explicacao?: string;
+        causasIds?: string[];
+        acoes?: { causaId: string; nome: string; setor: string; acao: string }[];
       }>('/ia/classificar', {
         method: 'POST',
         json: { reclamacao: triagemTexto, sku: triagemSku, laudo: '', solucao: '' },
@@ -939,6 +982,7 @@ export default function HomePage() {
       sku: triagemSku.toUpperCase(),
       produto: triagemSku.toUpperCase(),
       causaId: triagem.causaId,
+      causasIds: triagem.causasIds?.length ? triagem.causasIds : [triagem.causaId],
       peca: triagem.peca || '',
       causaManual: true,
     });
@@ -950,6 +994,8 @@ export default function HomePage() {
       fonte: triagem.fonte,
       explicacao: triagem.explicacao,
       acao: triagem.acao,
+      causasIds: triagem.causasIds,
+      acoes: triagem.acoes,
     });
     setAnexos([]);
     clearPendingFiles();
@@ -959,6 +1005,80 @@ export default function HomePage() {
   async function receber(id: string) {
     await api(`/reclamacoes/${id}/receber`, { method: 'POST' });
     await refresh();
+  }
+
+  function toggleSel(id: string) {
+    setSelecionadas((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function imprimirSelecionadas() {
+    const rows = lista.filter((r) => selecionadas.has(r.id));
+    if (!rows.length) {
+      setMsg('Selecione ao menos uma reclamação na lista.');
+      return;
+    }
+    imprimirHtml(montarFichas(rows, { cliente: true, custos: true, agrupar: true }, user?.nome || ''));
+  }
+
+  function imprimirRelatorioSetor() {
+    if (!lista.length) {
+      setMsg('Nenhuma reclamação no filtro atual para imprimir.');
+      return;
+    }
+    imprimirHtml(montarRelSetor(lista, { cliente: true, custos: true }, user?.nome || ''));
+  }
+
+  function imprimirFichaAtual() {
+    const base = lista.find((r) => r.id === editId);
+    const rec: Rec = {
+      id: editId || 'nova',
+      reg: base?.reg || 0,
+      data: form.data,
+      empresa: form.empresa,
+      setor: form.setor,
+      sku: form.sku,
+      produto: form.produto,
+      reclamacao: form.reclamacao,
+      cliente: form.cliente,
+      cidade: form.cidade,
+      uf: form.uf,
+      canal: form.canal,
+      protocolo: form.protocolo,
+      procedencia: form.procedencia,
+      devolucao: form.devolucao,
+      situacao: base?.situacao,
+      dataAcao: form.dataAcao,
+      dataRecebimento: form.dataRecebimento,
+      laudo: form.laudo,
+      solucao: form.solucao,
+      obs: form.obs,
+      obsCausa: form.obsCausa,
+      peca: form.peca,
+      custoTotal: base?.custoTotal,
+      setorResp: base?.setorResp,
+      causa: form.causaId
+        ? {
+            id: form.causaId,
+            nome: nomeCausa(form.causaId),
+            setor: causas.find((c) => c.id === form.causaId)?.setor || '',
+            acao: sugestao?.acao || '',
+          }
+        : undefined,
+      causas: (form.causasIds || []).map((id) => ({
+        id,
+        nome: nomeCausa(id),
+        setor: causas.find((c) => c.id === id)?.setor || '',
+        acao:
+          sugestao?.acoes?.find((a) => a.causaId === id)?.acao ||
+          (id === form.causaId ? sugestao?.acao || '' : ''),
+      })),
+    };
+    imprimirHtml(`<table class="prt"><thead><tr><td class="sp"></td></tr></thead><tfoot><tr><td class="sp"></td></tr></tfoot><tbody><tr><td>${fichaHTML(rec, { cliente: true, custos: true })}</td></tr></tbody></table>`);
   }
 
   if (!user) return null;
@@ -1130,6 +1250,9 @@ export default function HomePage() {
           <button type="button" className="small primary" onClick={exportRelatorioSetor}>
             Exportar relatório CSV
           </button>
+          <button type="button" className="small" onClick={imprimirRelatorioSetor}>
+            Imprimir relatório
+          </button>
         </div>
       ) : null}
 
@@ -1176,7 +1299,17 @@ export default function HomePage() {
                   Fonte: {fonteLabel(triagem.fonte)} · confiança {Math.round(triagem.confianca * 100)}%
                   {triagem.peca ? ` · peça: ${triagem.peca}` : ''}
                 </p>
-                {triagem.acao ? <p>{triagem.acao}</p> : null}
+                {triagem.acoes && triagem.acoes.length > 1 ? (
+                  <ul className="acoes-lista">
+                    {triagem.acoes.map((a) => (
+                      <li key={a.causaId}>
+                        <b>{a.nome}</b> → {a.setor}: {a.acao}
+                      </li>
+                    ))}
+                  </ul>
+                ) : triagem.acao ? (
+                  <p>{triagem.acao}</p>
+                ) : null}
                 {triagem.explicacao ? <p className="muted">{triagem.explicacao}</p> : null}
                 {triagemExemplos.length ? (
                   <ul className="plano-list">
@@ -1482,6 +1615,20 @@ export default function HomePage() {
               <button className="primary" onClick={openNew}>
                 + Nova reclamação
               </button>
+              <button
+                type="button"
+                className="small"
+                disabled={!selecionadas.size}
+                onClick={imprimirSelecionadas}
+              >
+                Imprimir selecionadas ({selecionadas.size})
+              </button>
+              <button type="button" className="small" onClick={imprimirRelatorioSetor}>
+                Imprimir relatório do filtro
+              </button>
+              <button type="button" className="small" onClick={exportRelatorioSetor}>
+                Exportar CSV
+              </button>
               <span className="muted">
                 {lista.length}
                 {lista.length >= 500 ? '+' : ''} reclamações
@@ -1492,6 +1639,17 @@ export default function HomePage() {
               <table className="list">
                 <thead>
                   <tr>
+                    <th className="selcol">
+                      <input
+                        type="checkbox"
+                        checked={lista.length > 0 && lista.every((r) => selecionadas.has(r.id))}
+                        onChange={(e) => {
+                          if (e.target.checked) setSelecionadas(new Set(lista.map((r) => r.id)));
+                          else setSelecionadas(new Set());
+                        }}
+                        title="Selecionar todas"
+                      />
+                    </th>
                     <th>Nº</th>
                     <th>Data</th>
                     <th>Produto voltou?</th>
@@ -1509,7 +1667,14 @@ export default function HomePage() {
                 </thead>
                 <tbody>
                   {lista.map((r) => (
-                    <tr key={r.id} onClick={() => openEdit(r)}>
+                    <tr key={r.id} onClick={() => openEdit(r)} className={selecionadas.has(r.id) ? 'sel' : ''}>
+                      <td className="selcol" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selecionadas.has(r.id)}
+                          onChange={() => toggleSel(r.id)}
+                        />
+                      </td>
                       <td>
                         #{r.reg}
                         {r.rascunho ? ' *' : ''}
@@ -1538,7 +1703,11 @@ export default function HomePage() {
                         <span className="muted">{r.produto}</span>
                       </td>
                       <td style={{ maxWidth: 220 }}>{r.reclamacao}</td>
-                      <td>{r.causa?.nome}</td>
+                      <td>
+                        {r.causas?.length
+                          ? r.causas.map((c) => c.nome).join(' · ')
+                          : r.causa?.nome || '—'}
+                      </td>
                       <td>
                         <span className="tag" title="Setor de fabricação">
                           {r.setor || '—'}
@@ -2845,22 +3014,51 @@ export default function HomePage() {
                     </p>
                   )}
                 </div>
-                <div className="field s2">
-                  <label>Causa</label>
-                  <select
-                    value={form.causaId}
-                    onChange={(e) => {
-                      setF('causaId', e.target.value);
-                      setF('causaManual', true);
-                    }}
-                  >
-                    <option value="">Selecione…</option>
-                    {causas.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.nome}
-                      </option>
-                    ))}
-                  </select>
+                <div className="field s2" style={{ gridColumn: '1 / -1' }}>
+                  <label>Motivo(s) — até 5</label>
+                  <p className="help" style={{ margin: '0 0 6px' }}>
+                    O primeiro marcado é o principal (setor responsável do card). Cada motivo traz a própria
+                    ação sugerida.
+                  </p>
+                  <div className="causa-chips">
+                    {causas.map((c) => {
+                      const on = (form.causasIds || []).includes(c.id);
+                      const cheio = !on && (form.causasIds || []).length >= 5;
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          className={`chip${on ? ' on' : ''}`}
+                          disabled={cheio}
+                          onClick={() => toggleCausaForm(c.id)}
+                          title={c.setor}
+                        >
+                          {c.nome}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {(form.causasIds || []).length ? (
+                    <ul className="acoes-lista">
+                      {(form.causasIds || []).map((id, i) => {
+                        const c = causas.find((x) => x.id === id);
+                        const acao =
+                          sugestao?.acoes?.find((a) => a.causaId === id)?.acao ||
+                          (i === 0 ? sugestao?.acao : '') ||
+                          '';
+                        return (
+                          <li key={id}>
+                            <b>
+                              {i === 0 ? 'Principal · ' : ''}
+                              {c?.nome || id}
+                            </b>
+                            {c?.setor ? ` → ${c.setor}` : ''}
+                            {acao ? ` — ${acao}` : ''}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : null}
                 </div>
                 <div className="field s2">
                   <label>Peça</label>
@@ -2953,6 +3151,9 @@ export default function HomePage() {
             </div>
             <div className="dfoot">
               <button onClick={classificarIa}>Sugerir causa e setor</button>
+              <button type="button" onClick={imprimirFichaAtual}>
+                Imprimir ficha
+              </button>
               <button onClick={() => setModal(false)}>Cancelar</button>
               <button className="primary" onClick={salvar}>
                 Salvar
@@ -2961,6 +3162,7 @@ export default function HomePage() {
           </div>
         </div>
       ) : null}
+      <div id="printArea" aria-hidden="true" />
     </div>
   );
 }
