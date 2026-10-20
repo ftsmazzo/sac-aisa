@@ -451,7 +451,8 @@ export default function HomePage() {
 
   async function exportRelatorioSetor() {
     try {
-      const rows = await api<Rec[]>(`/reclamacoes?${qs}`);
+      const exportQs = qs ? `${qs}&todos=1` : 'todos=1';
+      const rows = await api<Rec[]>(`/reclamacoes?${exportQs}`);
       if (!rows.length) {
         setMsg('Nenhuma reclamação no filtro atual para exportar.');
         return;
@@ -983,7 +984,7 @@ export default function HomePage() {
     <div>
       <header className="top">
         <span className="titulo">SAC</span>
-        <span className="muted">Agente de triagem · versão visível</span>
+        <span className="muted">Lista paginada · Redis · Admin</span>
         <span className="spacer" />
         {can('evolucao.ligar') ? (
           evolucao?.ativa ? (
@@ -1481,7 +1482,11 @@ export default function HomePage() {
               <button className="primary" onClick={openNew}>
                 + Nova reclamação
               </button>
-              <span className="muted">{lista.length} reclamações</span>
+              <span className="muted">
+                {lista.length}
+                {lista.length >= 500 ? '+' : ''} reclamações
+                {lista.length >= 500 ? ' (mostrando as primeiras 500)' : ''}
+              </span>
             </div>
             <div className="tablewrap">
               <table className="list">
