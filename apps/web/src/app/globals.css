@@ -131,6 +131,14 @@ table.list th {
   position: sticky; top: 0; background: var(--azul-claro); color: var(--azul-esc);
   text-align: left; padding: 8px 10px; font-size: 12.5px; border-bottom: 2px solid #6f9bf5;
 }
+table.list th.sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+table.list th.sortable:hover { background: #d7e4ff; }
+table.list th.sortable.on { color: var(--azul); }
+table.list th.sortable .sortmark { font-size: 11px; opacity: 0.85; }
 table.list td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; font-size: 13px; }
 table.list tr:hover td { background: #f6f9ff; cursor: pointer; }
 .tag { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; border: 1px solid; }

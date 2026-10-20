@@ -86,12 +86,23 @@ export class ReclamacoesService {
     }
 
     const ordem = query.ordem || 'data_desc';
-    const orderBy: Prisma.ReclamacaoOrderByWithRelationInput[] =
-      ordem === 'reg_desc'
-        ? [{ reg: 'desc' }]
-        : ordem === 'data_asc'
-          ? [{ data: 'asc' }, { reg: 'asc' }]
-          : [{ data: 'desc' }, { reg: 'desc' }];
+    const orderByDb = this.orderByFromOrdem(ordem);
+    // Campos derivados (custo, dias, situação, causa, setor resp.) ordenam depois do enrich
+    const ordemDerivada = [
+      'custo_asc',
+      'custo_desc',
+      'dias_asc',
+      'dias_desc',
+      'situacao_asc',
+      'situacao_desc',
+      'causa_asc',
+      'causa_desc',
+      'resp_asc',
+      'resp_desc',
+      'dev_asc',
+      'dev_desc',
+      'aguard_first',
+    ].includes(ordem);
 
     const unbounded = query.todos === '1';
     const pageSize = unbounded
@@ -99,7 +110,7 @@ export class ReclamacoesService {
       : Math.min(Math.max(Number(query.limit) || 500, 1), 2000);
     const page = Math.max(Number(query.page) || 1, 1);
     const skip = unbounded ? 0 : (page - 1) * pageSize;
-    const precisaFiltroDerivado = !!(query.causa || query.resp || ordem === 'aguard_first');
+    const precisaFiltroDerivado = !!(query.causa || query.resp || ordemDerivada);
 
     const overrides = await this.overrides();
     // Lista não carrega fotos (anexos vêm em GET /reclamacoes/:id/anexos)
@@ -107,7 +118,7 @@ export class ReclamacoesService {
     const takeSql = precisaFiltroDerivado ? Math.min(pageSize * 20, 50_000) : pageSize;
     let rows = await this.prisma.reclamacao.findMany({
       where,
-      orderBy,
+      orderBy: orderByDb,
       take: takeSql,
       skip: precisaFiltroDerivado ? 0 : skip,
       include: { causas: { orderBy: { ordem: 'asc' } } },
@@ -129,22 +140,89 @@ export class ReclamacoesService {
         return (manual || causaDe(r, overrides).setor) === query.resp;
       });
     }
-    if (ordem === 'aguard_first') {
-      rows.sort(
-        (a, b) =>
-          (situacao(b) === 'aguardando' ? 1 : 0) - (situacao(a) === 'aguardando' ? 1 : 0) ||
-          (b.data || '').localeCompare(a.data || '') ||
-          (b.reg || 0) - (a.reg || 0),
-      );
-    }
+
+    let enriched = rows.map((r) => enrichReclamacao(r, overrides));
+    enriched = this.sortLista(enriched, ordem);
 
     if (precisaFiltroDerivado) {
-      rows = rows.slice(skip, skip + pageSize);
-    } else if (rows.length > pageSize) {
-      rows = rows.slice(0, pageSize);
+      enriched = enriched.slice(skip, skip + pageSize);
+    } else if (enriched.length > pageSize) {
+      enriched = enriched.slice(0, pageSize);
     }
 
-    return rows.map((r) => enrichReclamacao(r, overrides));
+    return enriched;
+  }
+
+  private orderByFromOrdem(
+    ordem: string,
+  ): Prisma.ReclamacaoOrderByWithRelationInput[] {
+    switch (ordem) {
+      case 'reg_asc':
+        return [{ reg: 'asc' }];
+      case 'reg_desc':
+        return [{ reg: 'desc' }];
+      case 'data_asc':
+        return [{ data: 'asc' }, { reg: 'asc' }];
+      case 'sku_asc':
+        return [{ sku: 'asc' }, { reg: 'desc' }];
+      case 'sku_desc':
+        return [{ sku: 'desc' }, { reg: 'desc' }];
+      case 'empresa_asc':
+        return [{ empresa: 'asc' }, { reg: 'desc' }];
+      case 'empresa_desc':
+        return [{ empresa: 'desc' }, { reg: 'desc' }];
+      case 'cliente_asc':
+        return [{ cliente: 'asc' }, { reg: 'desc' }];
+      case 'cliente_desc':
+        return [{ cliente: 'desc' }, { reg: 'desc' }];
+      case 'setor_asc':
+        return [{ setor: 'asc' }, { reg: 'desc' }];
+      case 'setor_desc':
+        return [{ setor: 'desc' }, { reg: 'desc' }];
+      case 'data_desc':
+      default:
+        return [{ data: 'desc' }, { reg: 'desc' }];
+    }
+  }
+
+  private sortLista<T>(rows: T[], ordem: string): T[] {
+    type Row = T & {
+      reg?: number;
+      data?: string | null;
+      situacao?: string;
+      custoTotal?: number;
+      tempoDias?: number | null;
+      causa?: { nome?: string };
+      setorResp?: string;
+      devolucao?: string;
+    };
+    const list = rows as Row[];
+    const cmpStr = (a: string, b: string) => (a || '').localeCompare(b || '', 'pt-BR', { sensitivity: 'base' });
+    const mul = ordem.endsWith('_asc') ? 1 : -1;
+    let sorted: Row[];
+    if (ordem === 'aguard_first') {
+      sorted = [...list].sort(
+        (a, b) =>
+          (a.situacao === 'aguardando' ? 0 : 1) - (b.situacao === 'aguardando' ? 0 : 1) ||
+          String(b.data || '').localeCompare(String(a.data || '')) ||
+          (b.reg || 0) - (a.reg || 0),
+      );
+    } else if (ordem.startsWith('custo_')) {
+      sorted = [...list].sort((a, b) => mul * (Number(a.custoTotal || 0) - Number(b.custoTotal || 0)));
+    } else if (ordem.startsWith('dias_')) {
+      sorted = [...list].sort((a, b) => mul * ((a.tempoDias ?? -1) - (b.tempoDias ?? -1)));
+    } else if (ordem.startsWith('situacao_')) {
+      sorted = [...list].sort((a, b) => mul * cmpStr(String(a.situacao), String(b.situacao)));
+    } else if (ordem.startsWith('causa_')) {
+      sorted = [...list].sort((a, b) => mul * cmpStr(String(a.causa?.nome), String(b.causa?.nome)));
+    } else if (ordem.startsWith('resp_')) {
+      sorted = [...list].sort((a, b) => mul * cmpStr(String(a.setorResp), String(b.setorResp)));
+    } else if (ordem.startsWith('dev_')) {
+      sorted = [...list].sort((a, b) => mul * cmpStr(String(a.devolucao), String(b.devolucao)));
+    } else {
+      return rows;
+    }
+    return sorted as T[];
   }
 
   async get(id: string) {
