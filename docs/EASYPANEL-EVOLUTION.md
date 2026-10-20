@@ -94,13 +94,10 @@ Allowlist (qualquer um basta):
 2. Usuário ativo com perfil `master` ou `gestor` e telefone cadastrado
 3. Destino de alerta com `perfil` contendo `gestor` ou `master`
 
-Comandos (somente leitura, últimos 30 dias):
+Com `OPENROUTER_API_KEY` (ou OpenAI) na API, o gestor fala em linguagem natural. O orquestrador usa tools internas (listar período, status, KPI, causas, setor, PPM, alertas, pontos de atenção) — somente leitura.
 
-- `MENU` — ajuda
-- `KPI` — totais, tempo médio, meta
-- `CAUSAS` — principais motivos
-- `SETOR` / `SETOR Embalagem` — por setor responsável
-- `PPM` — qualidade / SKUs críticos
-- `ALERTAS` — alertas abertos
+Exemplos: “reclamações de hoje”, “resumo da semana”, “últimos 15 dias pontos de atenção”, “status da 402”.
+
+Atalhos sem IA: `MENU`, `KPI`, `CAUSAS`, `SETOR`, `PPM`, `ALERTAS`.
 
 Números na allowlist **não** entram no fluxo de cliente (`NOVA` / `STATUS`).

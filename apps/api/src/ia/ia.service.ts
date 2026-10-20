@@ -26,12 +26,35 @@ export interface ClassificacaoResult {
   acoes?: { causaId: string; nome: string; setor: string; acao: string }[];
 }
 
-type LlmProvider = {
+export type LlmProvider = {
   key: string;
   baseUrl: string;
   model: string;
   headers: Record<string, string>;
   nome: string;
+};
+
+export type ChatMessage = {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string | null;
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
+  name?: string;
+};
+
+export type ToolCall = {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+};
+
+export type ChatToolDef = {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
 };
 
 @Injectable()
@@ -40,13 +63,18 @@ export class IaService {
 
   constructor(private politica: PoliticaService) {}
 
-  private resolveProvider(): LlmProvider | null {
+  /** True se OpenRouter ou OpenAI estiver configurado. */
+  hasLlm(): boolean {
+    return !!this.resolveProvider();
+  }
+
+  resolveProvider(modelOverride?: string): LlmProvider | null {
     const openrouter = process.env.OPENROUTER_API_KEY?.trim();
     if (openrouter) {
       return {
         key: openrouter,
         baseUrl: 'https://openrouter.ai/api/v1/chat/completions',
-        model: process.env.OPENROUTER_MODEL || process.env.OPENAI_MODEL || 'openai/gpt-4o-mini',
+        model: modelOverride || process.env.OPENROUTER_MODEL || process.env.OPENAI_MODEL || 'openai/gpt-4o-mini',
         nome: 'OpenRouter',
         headers: {
           Authorization: `Bearer ${openrouter}`,
@@ -61,7 +89,7 @@ export class IaService {
       return {
         key: openai,
         baseUrl: 'https://api.openai.com/v1/chat/completions',
-        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        model: modelOverride || process.env.OPENAI_MODEL || 'gpt-4o-mini',
         nome: 'OpenAI',
         headers: {
           Authorization: `Bearer ${openai}`,
@@ -70,6 +98,120 @@ export class IaService {
       };
     }
     return null;
+  }
+
+  /**
+   * Chat com tool-calling (OpenAI-compatible).
+   * `executeTool` roda cada tool e devolve JSON serializável.
+   * Para ao receber texto final ou após `maxRounds` rodadas de tools.
+   */
+  async chatWithTools(opts: {
+    system: string;
+    user: string;
+    tools: ChatToolDef[];
+    executeTool: (name: string, args: Record<string, unknown>) => Promise<unknown>;
+    maxRounds?: number;
+    temperature?: number;
+    modelOverride?: string;
+    timeoutMs?: number;
+  }): Promise<string> {
+    const provider = this.resolveProvider(opts.modelOverride);
+    if (!provider) throw new Error('LLM não configurado');
+
+    const maxRounds = opts.maxRounds ?? 4;
+    const messages: ChatMessage[] = [
+      { role: 'system', content: opts.system },
+      { role: 'user', content: opts.user },
+    ];
+
+    const deadline = Date.now() + (opts.timeoutMs ?? 25_000);
+
+    for (let round = 0; round < maxRounds; round++) {
+      if (Date.now() > deadline) throw new Error('Timeout do orquestrador');
+
+      const body = {
+        model: provider.model,
+        temperature: opts.temperature ?? 0.3,
+        messages,
+        tools: opts.tools,
+        tool_choice: 'auto' as const,
+      };
+
+      const res = await fetch(provider.baseUrl, {
+        method: 'POST',
+        headers: provider.headers,
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(Math.max(3_000, deadline - Date.now())),
+      });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        throw new Error(`${provider.nome} ${res.status}: ${errText.slice(0, 200)}`);
+      }
+
+      const json = (await res.json()) as {
+        choices?: {
+          message?: {
+            content?: string | null;
+            tool_calls?: ToolCall[];
+          };
+          finish_reason?: string;
+        }[];
+      };
+      const msg = json.choices?.[0]?.message;
+      if (!msg) throw new Error('Resposta LLM vazia');
+
+      const toolCalls = msg.tool_calls || [];
+      if (!toolCalls.length) {
+        return (msg.content || '').trim() || 'Não consegui montar uma resposta agora.';
+      }
+
+      messages.push({
+        role: 'assistant',
+        content: msg.content ?? null,
+        tool_calls: toolCalls,
+      });
+
+      for (const tc of toolCalls) {
+        let args: Record<string, unknown> = {};
+        try {
+          args = JSON.parse(tc.function.arguments || '{}') as Record<string, unknown>;
+        } catch {
+          args = {};
+        }
+        const result = await opts.executeTool(tc.function.name, args);
+        messages.push({
+          role: 'tool',
+          tool_call_id: tc.id,
+          name: tc.function.name,
+          content: JSON.stringify(result).slice(0, 12_000),
+        });
+      }
+    }
+
+    // Última chamada sem tools para forçar síntese
+    const resFinal = await fetch(provider.baseUrl, {
+      method: 'POST',
+      headers: provider.headers,
+      body: JSON.stringify({
+        model: provider.model,
+        temperature: opts.temperature ?? 0.3,
+        tool_choice: 'none',
+        messages: [
+          ...messages,
+          {
+            role: 'user',
+            content:
+              'Com os dados das tools acima, responda agora ao gestor em português, curto e factual. Sem novas tools.',
+          },
+        ],
+      }),
+      signal: AbortSignal.timeout(Math.max(3_000, deadline - Date.now())),
+    });
+    if (!resFinal.ok) throw new Error(`${provider.nome} síntese ${resFinal.status}`);
+    const jsonFinal = (await resFinal.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    return (jsonFinal.choices?.[0]?.message?.content || '').trim() || 'Consultei os dados, mas não consegui resumir. Tente *KPI* ou *MENU*.';
   }
 
   classificarLegado(r: ReclamacaoLike): ClassificacaoResult {
