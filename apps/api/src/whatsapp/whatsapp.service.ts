@@ -140,7 +140,25 @@ export class WhatsappService {
     await this.prisma.whatsappMensagem.create({
       data: { conversaId: conversa.id, direcao: 'inbound', texto },
     });
-    const resposta = await this.gestorAgent.responder(texto);
+
+    // Memória curta: últimos turnos desta conversa interna
+    const recentes = await this.prisma.whatsappMensagem.findMany({
+      where: { conversaId: conversa.id },
+      orderBy: { criadoEm: 'desc' },
+      take: 16,
+      select: { direcao: true, texto: true },
+    });
+    const history = recentes
+      .reverse()
+      .slice(0, -1) // tira o inbound atual (já vai como user)
+      .filter((m) => (m.texto || '').trim())
+      .map((m) => ({
+        role: (m.direcao === 'inbound' ? 'user' : 'assistant') as 'user' | 'assistant',
+        content: String(m.texto).slice(0, 1500),
+      }))
+      .slice(-12);
+
+    const resposta = await this.gestorAgent.responder(texto, { history });
     await this.reply(conversa.id, destinoEnvio, resposta);
     return { ok: true, gestor: true };
   }

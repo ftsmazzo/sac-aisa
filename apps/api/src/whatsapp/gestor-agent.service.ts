@@ -8,16 +8,16 @@ import { GestorToolsService, resolverPeriodo } from './gestor-tools';
 
 const SYSTEM_ORQUESTRADOR =
   'Você é o assistente do gestor do SAC AISA (pós-venda industrial). ' +
-  'Conversa natural no WhatsApp — analista experiente que ajuda a decidir, sem menu.\n' +
-  'Regras anti-alucinação:\n' +
-  '1) Nunca invente números, registros ou “zero reclamações”. Cite só o JSON das tools.\n' +
-  '2) Se a tool devolver {erro}, diga que a consulta falhou — NÃO diga que não há dados.\n' +
-  '3) Período: use periodo_resolver com dias=N (ex.: 45) ou preset. Confirme o label {de,ate} na resposta.\n' +
-  '4) Setor: nomes oficiais podem ser “Embalagem / Expedição”. “Embalagens” deve casar via setor_resumo (fuzzy). ' +
-  'Se encontrado=false, mostre setores_disponiveis e pergunte qual — nunca diga “não há reclamações” só porque o nome não casou.\n' +
-  '5) Se totais.n>0, resuma e aponte o que merece atenção (causas, aguardando, amostra).\n' +
-  '6) Só leitura. Fuso America/Sao_Paulo. Respostas curtas e humanas; bullets só ao listar.\n' +
-  '7) Sem menus/comandos. Cumprimento = 1–2 frases + pergunta útil.';
+  'Conversa natural — analista que executa e responde, sem enrolar.\n' +
+  'Regras:\n' +
+  '1) Use o HISTÓRICO da conversa. “este ano”, “ok”, “sim” completam o pedido anterior — não reinicie com “como posso ajudar”.\n' +
+  '2) Nunca diga “aguarde”, “um momento” ou “vou verificar” sem já ter chamado as tools na mesma resposta.\n' +
+  '3) Se o pedido for claro (kit, setor, causas, lista), CHAME as tools na hora. Período padrão: últimos 30 dias. ' +
+  '“Este ano” / “ano” → periodo_resolver preset ano. Não pergunte período se der para assumir.\n' +
+  '4) Kit faltando / kit de montagem → reclamacoes_listar com causa=kit (e q=kit se precisar). Liste reg + produto.\n' +
+  '5) Nunca invente números. Se tool {erro}, diga que falhou — não diga zero.\n' +
+  '6) Setor fuzzy (Embalagens → Embalagem / Expedição). Se encontrado=false, mostre setores_disponiveis.\n' +
+  '7) Só leitura. Fuso America/Sao_Paulo. Resposta curta e útil para decisão.';
 
 @Injectable()
 export class GestorAgentService {
@@ -84,7 +84,10 @@ export class GestorAgentService {
     return sa.length >= 10 && sb.length >= 10 && (sa.endsWith(sb) || sb.endsWith(sa));
   }
 
-  async responder(texto: string): Promise<string> {
+  async responder(
+    texto: string,
+    opts?: { history?: { role: 'user' | 'assistant'; content: string }[] },
+  ): Promise<string> {
     const t = texto.trim() || 'oi';
 
     // Com IA: tudo é conversa (interpretar → tools → resposta humana). Sem menu/atalho.
@@ -93,11 +96,12 @@ export class GestorAgentService {
         const resposta = await this.ia.chatWithTools({
           system: SYSTEM_ORQUESTRADOR,
           user: t,
+          history: opts?.history,
           tools: this.tools.defs(),
           executeTool: (name, args) => this.tools.execute(name, args),
-          maxRounds: 4,
-          temperature: 0.45,
-          timeoutMs: 25_000,
+          maxRounds: 5,
+          temperature: 0.35,
+          timeoutMs: 35_000,
           modelOverride: process.env.GESTOR_LLM_MODEL?.trim() || undefined,
         });
         return this.clampWhatsapp(resposta);
