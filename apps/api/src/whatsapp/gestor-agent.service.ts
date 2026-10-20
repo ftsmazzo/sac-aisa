@@ -3,17 +3,30 @@ import { PrismaService } from '../prisma.service';
 import { ReclamacoesService } from '../reclamacoes/reclamacoes.service';
 import { QualidadeService } from '../qualidade/qualidade.service';
 import { AlertasService } from '../alertas/alertas.service';
+import { IaService } from '../ia/ia.service';
+import { GestorToolsService, resolverPeriodo } from './gestor-tools';
 
 const MENU_GESTOR =
   '*Assistente do gestor — SAC AISA*\n' +
-  'Período padrão: últimos 30 dias.\n\n' +
-  '*KPI* — totais, tempo médio, meta\n' +
-  '*CAUSAS* — principais motivos\n' +
-  '*SETOR* <nome> — reclamações do setor resp.\n' +
-  '*PPM* — qualidade / SKUs críticos\n' +
-  '*ALERTAS* — alertas abertos\n' +
-  '*MENU* — este texto\n\n' +
-  'Somente leitura. Para o fluxo de cliente use outro número.';
+  'Pergunte em português, por exemplo:\n' +
+  '· reclamações de *hoje* / da *semana* / últimos *15 dias*\n' +
+  '· *pontos de atenção*\n' +
+  '· *status* da 402\n' +
+  '· resumo / causas / setor / qualidade\n\n' +
+  'Atalhos (sem IA): *KPI* · *CAUSAS* · *SETOR* · *PPM* · *ALERTAS*\n\n' +
+  'Somente leitura. Cliente: use outro número.';
+
+const SYSTEM_ORQUESTRADOR =
+  'Você é o assistente do gestor do SAC AISA (pós-venda industrial). ' +
+  'Tom: competente, humano, direto — como um analista que fala no WhatsApp.\n' +
+  'Regras:\n' +
+  '1) Nunca invente números, registros ou status. Use só o que as tools devolverem.\n' +
+  '2) Se faltar período, use periodo_resolver com preset "hoje" (ou o que o gestor pediu: semana, 15d, 30d).\n' +
+  '3) Respostas curtas, bullets com *negrito* WhatsApp. Máx. ~1500 caracteres.\n' +
+  '4) Só leitura. Não prometa estorno, prazo ou alteração de reclamação.\n' +
+  '5) Para visão de risco use pontos_atencao. Para uma reclamação específica use reclamacao_status.\n' +
+  '6) Se a tool voltar vazio, diga que não há dados no período — não preencha com chute.\n' +
+  '7) Fuso: America/Sao_Paulo.';
 
 @Injectable()
 export class GestorAgentService {
@@ -24,6 +37,8 @@ export class GestorAgentService {
     private reclamacoes: ReclamacoesService,
     private qualidade: QualidadeService,
     private alertas: AlertasService,
+    private ia: IaService,
+    private tools: GestorToolsService,
   ) {}
 
   /** Telefone (ou LID) está autorizado a usar o ramo gestor? */
@@ -61,7 +76,6 @@ export class GestorAgentService {
     });
     for (const d of destinos) {
       const perfil = (d.perfil || '').toLowerCase();
-      // Só destinos explicitamente de gestor/master (evita liberar setor operacional)
       if (!perfil.includes('gestor') && !perfil.includes('master')) continue;
       const t = String(d.telefone || '').replace(/\D/g, '');
       if (t && this.phoneMatch(digits, t)) {
@@ -74,70 +88,107 @@ export class GestorAgentService {
 
   private phoneMatch(a: string, b: string) {
     if (a === b) return true;
-    // BR: compara sufixo de 10–11 dígitos (DDD+número)
     const sa = a.slice(-11);
     const sb = b.slice(-11);
     return sa.length >= 10 && sb.length >= 10 && (sa.endsWith(sb) || sb.endsWith(sa));
   }
 
-  private periodoPadrao() {
-    const ate = new Date();
-    const de = new Date(Date.now() - 30 * 864e5);
-    const iso = (d: Date) => d.toISOString().slice(0, 10);
-    return { de: iso(de), ate: iso(ate) };
-  }
-
   async responder(texto: string): Promise<string> {
     const t = texto.trim();
     const lower = t.toLowerCase();
-    const { de, ate } = this.periodoPadrao();
 
     if (
       !t ||
       ['menu', 'ajuda', 'help', 'oi', 'olá', 'ola', 'bom dia', 'boa tarde', 'boa noite'].includes(lower)
     ) {
-      return MENU_GESTOR;
+      const extra = this.ia.hasLlm()
+        ? ''
+        : '\n\n_IA desligada: configure OPENROUTER_API_KEY para perguntas em texto livre._';
+      return MENU_GESTOR + extra;
+    }
+
+    // Atalhos sem LLM (rápido / offline)
+    const atalho = await this.tryAtalho(t, lower);
+    if (atalho != null) return atalho;
+
+    if (!this.ia.hasLlm()) {
+      return (
+        'Para perguntas em texto livre (ex.: “reclamações de hoje”) configure *OPENROUTER_API_KEY* na API.\n\n' +
+        MENU_GESTOR
+      );
     }
 
     try {
-      if (lower === 'kpi' || lower === 'kpis' || lower.startsWith('kpi ')) {
+      const resposta = await this.ia.chatWithTools({
+        system: SYSTEM_ORQUESTRADOR,
+        user: t,
+        tools: this.tools.defs(),
+        executeTool: (name, args) => this.tools.execute(name, args),
+        maxRounds: 4,
+        temperature: 0.35,
+        timeoutMs: 25_000,
+        // Só o orquestrador usa GESTOR_LLM_MODEL; classificação/foto ficam no modelo padrão
+        modelOverride: process.env.GESTOR_LLM_MODEL?.trim() || undefined,
+      });
+      return this.clampWhatsapp(resposta);
+    } catch (e) {
+      this.log.warn(`Orquestrador gestor falhou: ${e}`);
+      return (
+        'Não consegui consultar com a IA agora. Tente de novo ou use atalhos *KPI*, *CAUSAS*, *ALERTAS*, *MENU*.'
+      );
+    }
+  }
+
+  private clampWhatsapp(s: string) {
+    const t = s.trim();
+    if (t.length <= 3500) return t;
+    return t.slice(0, 3400) + '\n…';
+  }
+
+  /** Só tokens exatos (ou SETOR + nome). Frases com período vão para o LLM. */
+  private async tryAtalho(t: string, lower: string): Promise<string | null> {
+    const { de, ate } = resolverPeriodo('30d');
+    try {
+      if (lower === 'kpi' || lower === 'kpis') {
         return await this.cmdKpi(de, ate);
       }
-      if (lower === 'causas' || lower.startsWith('causas ')) {
+      if (lower === 'causas') {
         return await this.cmdCausas(de, ate);
       }
-      if (lower.startsWith('setor')) {
+      if (lower === 'setor' || /^setor\s+\S+/i.test(t)) {
         const nome = t.replace(/^setor\s*/i, '').trim();
+        // "setor da semana" → LLM; "setor embalagem" → atalho
+        if (nome && /\b(hoje|ontem|semana|dias?|mês|mes|kpi|alerta)\b/i.test(nome)) {
+          return null;
+        }
         return await this.cmdSetor(de, ate, nome);
       }
-      if (lower === 'ppm' || lower.startsWith('ppm ') || lower === 'qualidade') {
+      if (lower === 'ppm' || lower === 'qualidade') {
         return await this.cmdPpm(de, ate);
       }
-      if (lower === 'alertas' || lower.startsWith('alerta')) {
+      if (lower === 'alertas' || lower === 'alerta') {
         return await this.cmdAlertas();
       }
     } catch (e) {
-      this.log.warn(`Comando gestor falhou (${lower}): ${e}`);
+      this.log.warn(`Atalho gestor falhou (${lower}): ${e}`);
       return 'Não consegui consultar agora. Tente de novo em instantes ou use o painel web.';
     }
-
-    return `Não reconheci o comando.\n\n${MENU_GESTOR}`;
+    return null;
   }
 
   private async cmdKpi(de: string, ate: string) {
     const k = await this.reclamacoes.kpis({ de, ate });
-    const t = k.totais;
-    const tempo =
-      t.tempoMedio == null ? '—' : `${t.tempoMedio.toFixed(1)} dias`;
-    const meta = t.pctMeta == null ? '—' : `${t.pctMeta}% na meta (≤${t.metaDias}d)`;
+    const tot = k.totais;
+    const tempo = tot.tempoMedio == null ? '—' : `${tot.tempoMedio.toFixed(1)} dias`;
+    const meta = tot.pctMeta == null ? '—' : `${tot.pctMeta}% na meta (≤${tot.metaDias}d)`;
     return (
       `*KPI* (${de} → ${ate})\n` +
-      `Reclamações: *${t.n}*\n` +
-      `Aguardando: ${t.aguardando} · Tratativa: ${t.tratativa} · Resolvidas: ${t.resolvida}\n` +
+      `Reclamações: *${tot.n}*\n` +
+      `Aguardando: ${tot.aguardando} · Tratativa: ${tot.tratativa} · Resolvidas: ${tot.resolvida}\n` +
       `Tempo médio: *${tempo}*\n` +
       `Meta: ${meta}\n` +
-      `Custo total: R$ ${t.custo.toFixed(0)}\n` +
-      `Recorrência (≥3): ${t.pctRecorrentes}%`
+      `Custo total: R$ ${tot.custo.toFixed(0)}\n` +
+      `Recorrência (≥3): ${tot.pctRecorrentes}%`
     );
   }
 
@@ -161,7 +212,6 @@ export class GestorAgentService {
       );
     }
     const k = await this.reclamacoes.kpis({ de, ate, resp: nome });
-    // Filtrar direcionamento fuzzy
     const needle = nome.toLowerCase();
     const match = (k.direcionamento || []).filter((g) => g.k.toLowerCase().includes(needle));
     if (!match.length && k.totais.n === 0) {
@@ -173,9 +223,7 @@ export class GestorAgentService {
       `*Setor: ${lista[0].k}* (${de} → ${ate})\n` +
       `Reclamações: *${k.totais.n}* · Aguardando: ${k.totais.aguardando} · Tratativa: ${k.totais.tratativa}\n` +
       `Tempo médio: ${k.totais.tempoMedio == null ? '—' : k.totais.tempoMedio.toFixed(1) + 'd'}\n` +
-      (causas.length
-        ? `Top causas:\n${causas.map((c) => `· ${c.k} (${c.n})`).join('\n')}`
-        : '')
+      (causas.length ? `Top causas:\n${causas.map((c) => `· ${c.k} (${c.n})`).join('\n')}` : '')
     );
   }
 

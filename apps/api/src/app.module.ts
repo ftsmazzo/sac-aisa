@@ -17,6 +17,7 @@ import { EvolutionService } from './whatsapp/evolution.service';
 import { WhatsappService } from './whatsapp/whatsapp.service';
 import { WhatsappController } from './whatsapp/whatsapp.controller';
 import { GestorAgentService } from './whatsapp/gestor-agent.service';
+import { GestorToolsService } from './whatsapp/gestor-tools';
 import { DadosController } from './dados/dados.controller';
 import { QualidadeController } from './qualidade/qualidade.controller';
 import { QualidadeService } from './qualidade/qualidade.service';
@@ -88,6 +89,7 @@ class HealthController {
     IaService,
     EvolutionService,
     WhatsappService,
+    GestorToolsService,
     GestorAgentService,
     QualidadeService,
     PoliticaService,
