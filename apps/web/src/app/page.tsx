@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, clearSession, downloadAuthed, getUser, uploadFile, uploadUrl } from '@/lib/api';
 import { fichaHTML, imprimirHtml, montarFichas, montarRelSetor } from '@/lib/print';
@@ -327,6 +327,8 @@ export default function HomePage() {
   } | null>(null);
   const [tab, setTab] = useState<Tab>('triagem');
   const [filtros, setFiltros] = useState<Filtros>(emptyFiltros);
+  /** Ordenação da lista: campo_asc | campo_desc (ex.: reg_desc, data_asc) */
+  const [ordemLista, setOrdemLista] = useState('data_desc');
   const [lista, setLista] = useState<Rec[]>([]);
   const [kpis, setKpis] = useState<Kpis | null>(null);
   const [alertas, setAlertas] = useState<Alerta[]>([]);
@@ -434,8 +436,49 @@ export default function HomePage() {
     if (filtros.resp) p.set('resp', filtros.resp);
     if (filtros.causa) p.set('causa', filtros.causa);
     if (filtros.sku) p.set('sku', filtros.sku);
+    if (ordemLista) p.set('ordem', ordemLista);
     return p.toString();
-  }, [filtros]);
+  }, [filtros, ordemLista]);
+
+  function toggleOrdem(campo: string) {
+    setOrdemLista((o) => {
+      const asc = `${campo}_asc`;
+      const desc = `${campo}_desc`;
+      if (o === desc) return asc;
+      if (o === asc) return desc;
+      // 1º clique: maior→menor (desc) para nº/data/custo/dias; A→Z (asc) para textos
+      const preferAsc = ['sku', 'empresa', 'cliente', 'setor', 'causa', 'resp', 'situacao', 'dev'].includes(
+        campo,
+      );
+      return preferAsc ? asc : desc;
+    });
+  }
+
+  function SortTh({
+    campo,
+    children,
+    className,
+  }: {
+    campo: string;
+    children: ReactNode;
+    className?: string;
+  }) {
+    const active = ordemLista.startsWith(`${campo}_`);
+    const dir = ordemLista.endsWith('_asc') ? ' ↑' : ' ↓';
+    return (
+      <th
+        className={`sortable${active ? ' on' : ''}${className ? ` ${className}` : ''}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          toggleOrdem(campo);
+        }}
+        title="Clique para ordenar"
+      >
+        {children}
+        {active ? <span className="sortmark">{dir}</span> : null}
+      </th>
+    );
+  }
 
   const chipsAtivos = useMemo(() => {
     const chips: { key: keyof Filtros; label: string }[] = [];
@@ -1665,19 +1708,19 @@ export default function HomePage() {
                         title="Selecionar todas"
                       />
                     </th>
-                    <th>Nº</th>
-                    <th>Data</th>
-                    <th>Produto voltou?</th>
-                    <th>Empresa</th>
-                    <th>SKU</th>
+                    <SortTh campo="reg">Nº</SortTh>
+                    <SortTh campo="data">Data</SortTh>
+                    <SortTh campo="dev">Produto voltou?</SortTh>
+                    <SortTh campo="empresa">Empresa</SortTh>
+                    <SortTh campo="sku">SKU</SortTh>
                     <th>Reclamação</th>
-                    <th>Causa</th>
-                    <th>Setor fab.</th>
-                    <th>Setor resp.</th>
-                    <th>Cliente</th>
-                    <th>Dias</th>
-                    <th>Custo</th>
-                    <th>Situação</th>
+                    <SortTh campo="causa">Causa</SortTh>
+                    <SortTh campo="setor">Setor fab.</SortTh>
+                    <SortTh campo="resp">Setor resp.</SortTh>
+                    <SortTh campo="cliente">Cliente</SortTh>
+                    <SortTh campo="dias">Dias</SortTh>
+                    <SortTh campo="custo">Custo</SortTh>
+                    <SortTh campo="situacao">Situação</SortTh>
                   </tr>
                 </thead>
                 <tbody>
