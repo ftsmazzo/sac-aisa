@@ -712,7 +712,7 @@ export default function HomePage() {
   }
 
   useEffect(() => {
-    if (tab !== 'decisoes' || !evolucao?.ativa) return;
+    if (tab !== 'decisoes') return;
     const ac = new AbortController();
     const q = filtros.resp ? `?resp=${encodeURIComponent(filtros.resp)}` : '';
     api<{ ativa: boolean; cartoes: CartaoDecisao[] }>(`/evolucao/decisoes${q}`, { signal: ac.signal })
@@ -723,7 +723,7 @@ export default function HomePage() {
         if (e?.name !== 'AbortError') setMsg(e.message);
       });
     return () => ac.abort();
-  }, [tab, evolucao?.ativa, filtros.resp]);
+  }, [tab, filtros.resp]);
 
   useEffect(() => {
     if (tab !== 'qualidade' || !evolucao?.ativa) {
@@ -1311,7 +1311,7 @@ export default function HomePage() {
             can('kpis.ver') ? (['kpis', 'KPIs'] as const) : null,
             can('reclamacoes.ver') ? (['lista', 'Reclamações'] as const) : null,
             can('alertas.ver') ? (['alertas', 'Alertas'] as const) : null,
-            evolucao?.ativa && can('decisoes.ver') ? (['decisoes', 'Decidir hoje'] as const) : null,
+            can('decisoes.ver') ? (['decisoes', 'Decidir hoje'] as const) : null,
             can('qualidade.ver') ? (['qualidade', 'Qualidade'] as const) : null,
             can('gestao.ver') ? (['gestao', 'Gestão'] as const) : null,
             can('dados.ver') ? (['dados', 'Dados'] as const) : null,
@@ -1912,18 +1912,17 @@ export default function HomePage() {
           </>
         ) : null}
 
-        {tab === 'decisoes' && evolucao?.ativa ? (
+        {tab === 'decisoes' ? (
           <>
             <p className="kpi-insight">
-              Fila do setor responsável. Ao marcar produto recebido, nasce um cartão de revisão na chegada.
-              A ação sugerida vem do catálogo de causas.
+              Um cartão por reclamação ainda aberta (sem data de ação). As que já chegaram ficam como revisão na chegada.
               {filtros.resp ? ` Filtro: ${filtros.resp}.` : ' Use o filtro Resolve para ver um setor.'}
             </p>
             {decisoes.map((d) => (
               <div className="card" key={d.id}>
                 <h3>
                   {d.titulo}{' '}
-                  <span className={`tag ${d.tipo === 'revisao' ? 'trat' : 'aguard'}`}>
+                  <span className={`tag ${d.tipo === 'aguardando' ? 'aguard' : 'trat'}`}>
                     {{
                       atraso: 'atraso',
                       recorrencia: 'recorrência',
@@ -1934,6 +1933,8 @@ export default function HomePage() {
                       seguranca: 'segurança',
                       rascunho: 'rascunho',
                       revisao: 'revisão na chegada',
+                      ativa: 'em tratativa',
+                      aguardando: 'aguardando chegada',
                     }[d.tipo] || d.tipo}
                   </span>
                 </h3>
