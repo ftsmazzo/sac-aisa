@@ -7,6 +7,9 @@ No app: **Admin → saúde e backups** (master com permissão `admin.backup`):
 1. Vê o **último backup** e a **lista** de dumps no servidor.
 2. Clica **Gerar backup agora** → `pg_dump` grava `sac-YYYYMMDD-HHMMSS.dump` em `/data/backups`.
 3. Clica **Baixar** na linha desejada.
+4. Cron interno da API: dump automático **diário às 03:00** (`BACKUP_CRON=0` desliga).
+
+O `.dump` cobre o **Postgres**. Fotos/anexos ficam no volume de uploads — faça backup desse volume no EasyPanel também.
 
 Isso é a garantia visível para o cliente. Os arquivos ficam no volume `backups` da API (não somem no download do browser).
 

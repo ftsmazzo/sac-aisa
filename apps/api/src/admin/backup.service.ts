@@ -5,6 +5,7 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
 import { execFile } from 'child_process';
 import {
   createReadStream,
@@ -38,6 +39,21 @@ export class BackupService {
     private fila: FilaService,
   ) {}
 
+  /** Dump automático diário às 03:00 (America/Sao_Paulo via TZ do container). */
+  @Cron('0 3 * * *')
+  async cronDumpDiario() {
+    if (process.env.BACKUP_CRON === '0') {
+      this.log.log('Cron de backup desligado (BACKUP_CRON=0)');
+      return;
+    }
+    try {
+      const item = await this.criar('cron');
+      this.log.log(`Backup automático ok: ${item.nome} (${item.tamanhoLabel})`);
+    } catch (e) {
+      this.log.error(`Backup automático falhou: ${e}`);
+    }
+  }
+
   private dir() {
     const d = process.env.BACKUP_DIR || '/data/backups';
     if (!existsSync(d)) mkdirSync(d, { recursive: true });
@@ -57,7 +73,14 @@ export class BackupService {
     return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   }
 
-  listar(): { ultimo: BackupItem | null; backups: BackupItem[]; pasta: string } {
+  listar(): {
+    ultimo: BackupItem | null;
+    backups: BackupItem[];
+    pasta: string;
+    retencao: number;
+    cronAtivo: boolean;
+    aviso: string;
+  } {
     const pasta = this.dir();
     const backups = readdirSync(pasta)
       .filter((f) => /^sac-\d{8}-\d{6}\.dump$/.test(f))
@@ -71,7 +94,15 @@ export class BackupService {
         };
       })
       .sort((a, b) => b.criadoEm.localeCompare(a.criadoEm));
-    return { ultimo: backups[0] || null, backups, pasta };
+    return {
+      ultimo: backups[0] || null,
+      backups,
+      pasta,
+      retencao: this.maxArquivos,
+      cronAtivo: process.env.BACKUP_CRON !== '0',
+      aviso:
+        'O .dump cobre o Postgres (dados). Fotos/anexos ficam no volume de uploads — faça backup desse volume no EasyPanel também.',
+    };
   }
 
   /** Prisma usa ?schema=public; pg_dump não aceita esse query param. */

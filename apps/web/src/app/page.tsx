@@ -407,6 +407,9 @@ export default function HomePage() {
   const [adminBackups, setAdminBackups] = useState<{
     ultimo: { nome: string; criadoEm: string; tamanhoLabel: string } | null;
     backups: { nome: string; criadoEm: string; tamanhoLabel: string; tamanhoBytes: number }[];
+    retencao?: number;
+    cronAtivo?: boolean;
+    aviso?: string;
   } | null>(null);
   const [adminBackupBusy, setAdminBackupBusy] = useState(false);
   const [adminBusy, setAdminBusy] = useState(false);
@@ -2722,9 +2725,26 @@ export default function HomePage() {
               <h3>Admin · saúde e backups</h3>
               <p className="muted">
                 Dumps reais do Postgres (arquivo <code>.dump</code>), guardados no servidor. Você vê a
-                lista, gera um novo e baixa quando quiser. Isso é a garantia do cliente — não depende
-                só do EasyPanel.
+                lista, gera um novo e baixa quando quiser. Dump automático diário às 03:00 (retenção
+                configurável). Isso é a garantia do cliente — não depende só do EasyPanel.
               </p>
+              {adminBackups?.aviso ? (
+                <p className="muted" style={{ marginTop: 8 }}>
+                  {adminBackups.aviso}
+                </p>
+              ) : null}
+              {adminBackups ? (
+                <p className="muted" style={{ marginTop: 4 }}>
+                  Cron diário:{' '}
+                  <b>{adminBackups.cronAtivo === false ? 'desligado' : 'ativo (03:00)'}</b>
+                  {adminBackups.retencao != null ? (
+                    <>
+                      {' '}
+                      · Mantém os últimos <b>{adminBackups.retencao}</b> dumps
+                    </>
+                  ) : null}
+                </p>
+              ) : null}
               <div className="tools">
                 <button
                   type="button"
@@ -2752,7 +2772,13 @@ export default function HomePage() {
                           '/admin/backups',
                           { method: 'POST' },
                         );
-                        setAdminBackups({ ultimo: r.ultimo, backups: r.backups });
+                        setAdminBackups({
+                          ultimo: r.ultimo,
+                          backups: r.backups,
+                          retencao: r.retencao,
+                          cronAtivo: r.cronAtivo,
+                          aviso: r.aviso,
+                        });
                         setMsg(`Backup gerado: ${r.backup?.nome || r.ultimo?.nome}`);
                       } catch (e) {
                         setMsg(e instanceof Error ? e.message : 'Falha ao gerar dump');

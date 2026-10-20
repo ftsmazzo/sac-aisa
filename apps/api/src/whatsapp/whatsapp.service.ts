@@ -5,6 +5,7 @@ import { IaService } from '../ia/ia.service';
 import { situacao, DEV_LABEL, devDe, comandoRetorno } from '../domain-bridge';
 import { PoliticaService } from '../evolucao/politica.service';
 import { AuditoriaService } from '../auditoria.service';
+import { GestorAgentService } from './gestor-agent.service';
 
 type Ctx = {
   passo?: string;
@@ -30,6 +31,7 @@ export class WhatsappService {
     private ia: IaService,
     private auditoria: AuditoriaService,
     private politica: PoliticaService,
+    private gestorAgent: GestorAgentService,
   ) {}
 
   async handleWebhook(payload: unknown) {
@@ -37,6 +39,12 @@ export class WhatsappService {
     if (!msg) return { ignored: true };
     const { telefone, texto, nome } = msg;
     if (!texto) return { ignored: true };
+
+    // Ramo gestor (allowlist) — não mistura com fluxo de cliente
+    const gestor = await this.gestorAgent.isGestor(telefone);
+    if (gestor.ok) {
+      return this.handleGestor(telefone, texto, nome, gestor.nome);
+    }
 
     let conversa = await this.prisma.whatsappConversa.findFirst({
       where: { telefone, ativo: true, papel: 'cliente' },
@@ -101,6 +109,35 @@ export class WhatsappService {
       'Não entendi. Digite *MENU*, *NOVA*, *STATUS 123* ou *ATENDENTE*.',
     );
     return { ok: true };
+  }
+
+  private async handleGestor(
+    telefone: string,
+    texto: string,
+    nomePush?: string,
+    nomeGestor?: string,
+  ) {
+    let conversa = await this.prisma.whatsappConversa.findFirst({
+      where: { telefone, ativo: true, papel: 'interno' },
+      orderBy: { alteradoEm: 'desc' },
+    });
+    if (!conversa) {
+      conversa = await this.prisma.whatsappConversa.create({
+        data: {
+          telefone,
+          nome: nomeGestor || nomePush || '',
+          papel: 'interno',
+          estado: 'gestor',
+          contexto: {},
+        },
+      });
+    }
+    await this.prisma.whatsappMensagem.create({
+      data: { conversaId: conversa.id, direcao: 'inbound', texto },
+    });
+    const resposta = await this.gestorAgent.responder(texto);
+    await this.reply(conversa.id, telefone, resposta);
+    return { ok: true, gestor: true };
   }
 
   private extractMessage(payload: unknown): { telefone: string; texto: string; nome?: string } | null {
