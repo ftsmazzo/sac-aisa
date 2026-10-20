@@ -18,12 +18,14 @@ import { Roles } from '../auth/auth.guard';
 import { AuthUser } from '../auth/auth.types';
 import { AuditoriaService } from '../auditoria.service';
 import { CAUSAS, SETORES_RESP } from '../domain-bridge';
+import { ProdutoLookupService } from '../produtos/produto-lookup.service';
 
 @Controller('gestao')
 export class GestaoController {
   constructor(
     private prisma: PrismaService,
     private audit: AuditoriaService,
+    private produtoLookup: ProdutoLookupService,
   ) {}
 
   @Get('causas')
@@ -132,6 +134,12 @@ export class GestaoController {
       orderBy: { cod: 'asc' },
       take: 500,
     });
+  }
+
+  /** Resolve SKU → produto/setor fab./família (como o HTML antigo ao digitar o SKU). */
+  @Get('produtos/por-sku')
+  porSku(@Query('sku') sku?: string) {
+    return this.produtoLookup.lookup(String(sku || ''));
   }
 
   @Roles('master')

@@ -24,6 +24,10 @@ import {
   PERMISSOES_PADRAO,
   mesclarPermissoes,
   temPermissao,
+  empresaDeCat,
+  setorLabel,
+  U,
+  clean,
   type AlertConfig,
   type CausaDef,
   type ReclamacaoLike,
@@ -57,6 +61,10 @@ export {
   PERMISSOES_PADRAO,
   mesclarPermissoes,
   temPermissao,
+  empresaDeCat,
+  setorLabel,
+  U,
+  clean,
 };
 
 export type { AlertConfig, CausaDef, ReclamacaoLike, PoliticaEvolucao, PermissaoChave };

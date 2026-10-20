@@ -11,6 +11,7 @@ import {
 import { AuditoriaService } from '../auditoria.service';
 import { AuthUser } from '../auth/auth.types';
 import { PoliticaService } from '../evolucao/politica.service';
+import { ProdutoLookupService } from '../produtos/produto-lookup.service';
 
 @Injectable()
 export class ReclamacoesService {
@@ -18,6 +19,7 @@ export class ReclamacoesService {
     private prisma: PrismaService,
     private auditoria: AuditoriaService,
     private politica: PoliticaService,
+    private produtos: ProdutoLookupService,
   ) {}
 
   async overrides(): Promise<Record<string, Partial<CausaDef>>> {
@@ -325,7 +327,10 @@ export class ReclamacoesService {
   async create(body: Record<string, unknown>, user: AuthUser) {
     const max = await this.prisma.reclamacao.aggregate({ _max: { reg: true } });
     const reg = Number(body.reg) || (max._max.reg || 0) + 1;
-    const mapped = this.mapBody(body) as Prisma.ReclamacaoUncheckedCreateInput;
+    let mapped = this.mapBody(body) as Prisma.ReclamacaoUncheckedCreateInput;
+    mapped = (await this.produtos.completarCampos(
+      mapped as Record<string, unknown>,
+    )) as Prisma.ReclamacaoUncheckedCreateInput;
     if (!mapped.causaManual && !mapped.causaId) {
       mapped.causaId = causaDe(mapped as never).id;
     }
@@ -355,9 +360,45 @@ export class ReclamacoesService {
   async update(id: string, body: Record<string, unknown>, user: AuthUser) {
     const atual = await this.prisma.reclamacao.findUnique({ where: { id } });
     if (!atual) throw new NotFoundException('Reclamação não encontrada');
-    const mapped = this.mapBody(body, true) as Prisma.ReclamacaoUncheckedUpdateInput;
+    let mapped = this.mapBody(body, true) as Prisma.ReclamacaoUncheckedUpdateInput;
     const merged = { ...atual, ...mapped };
-    mapped.situacao = situacao(merged as never);
+    // Se SKU veio no body (ou já existia) e setor fab. está vazio, completa do cadastro
+    const preenchido = await this.produtos.completarCampos({
+      sku: merged.sku,
+      setor: merged.setor,
+      produto: merged.produto,
+      familia: merged.familia,
+      empresa: merged.empresa,
+    });
+    if (!String(atual.setor || mapped.setor || '').trim() && preenchido.setor) {
+      mapped.setor = preenchido.setor;
+    }
+    if (!String(atual.produto || mapped.produto || '').trim() && preenchido.produto) {
+      mapped.produto = preenchido.produto;
+    }
+    if (!String(atual.familia || mapped.familia || '').trim() && preenchido.familia) {
+      mapped.familia = preenchido.familia;
+    }
+    if (!String(atual.empresa || mapped.empresa || '').trim() && preenchido.empresa) {
+      mapped.empresa = preenchido.empresa;
+    }
+    // SKU alterado: atualiza setor fab. a partir do novo produto
+    if (
+      mapped.sku !== undefined &&
+      String(mapped.sku) !== String(atual.sku || '') &&
+      preenchido.setor
+    ) {
+      mapped.setor = preenchido.setor;
+      if (preenchido.familia) mapped.familia = preenchido.familia;
+      if (preenchido.produto && (!mapped.produto || mapped.produto === atual.produto)) {
+        mapped.produto = preenchido.produto;
+      }
+      if (preenchido.empresa && (!mapped.empresa || mapped.empresa === atual.empresa)) {
+        mapped.empresa = preenchido.empresa;
+      }
+    }
+    const finalMerged = { ...atual, ...mapped };
+    mapped.situacao = situacao(finalMerged as never);
     mapped.alteradoPor = user.login;
     const updated = await this.prisma.reclamacao.update({ where: { id }, data: mapped });
     if (body.causasIds !== undefined || body.causaId !== undefined) {

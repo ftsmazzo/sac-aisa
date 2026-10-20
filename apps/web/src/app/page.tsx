@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, clearSession, downloadAuthed, getUser, uploadFile, uploadUrl } from '@/lib/api';
 import { fichaHTML, imprimirHtml, montarFichas, montarRelSetor } from '@/lib/print';
@@ -15,6 +15,7 @@ type Rec = {
   setor?: string;
   sku?: string;
   produto?: string;
+  familia?: string;
   reclamacao?: string;
   cliente?: string;
   cidade?: string;
@@ -277,6 +278,7 @@ const emptyForm = {
   setor: '',
   sku: '',
   produto: '',
+  familia: '',
   garantia: 'SIM',
   canal: '',
   protocolo: '',
@@ -337,6 +339,8 @@ export default function HomePage() {
   const [editId, setEditId] = useState<string | null>(null);
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState(emptyForm);
+  const [skuHint, setSkuHint] = useState<{ ok: boolean; text: string } | null>(null);
+  const ultimoProdAutoRef = useRef('');
   const [sugestao, setSugestao] = useState<{
     causaNome: string;
     setor: string;
@@ -772,6 +776,67 @@ export default function HomePage() {
     clearPendingFiles();
   }, [modal]);
 
+  /** Como o HTML antigo: digitar SKU preenche setor fab., produto, família e empresa. */
+  useEffect(() => {
+    if (!modal) return;
+    const sku = form.sku.trim();
+    if (!sku) {
+      setSkuHint(null);
+      return;
+    }
+    const ac = new AbortController();
+    const t = window.setTimeout(() => {
+      api<{
+        encontrado: boolean;
+        cod?: string;
+        produto?: string;
+        setor?: string;
+        familia?: string;
+        categoria?: string;
+        empresa?: string;
+      }>(`/gestao/produtos/por-sku?sku=${encodeURIComponent(sku)}`, { signal: ac.signal })
+        .then((hit) => {
+          if (ac.signal.aborted) return;
+          if (!hit.encontrado) {
+            setSkuHint({
+              ok: false,
+              text: 'SKU sem correspondência no cadastro: setor e família ficam vazios. Cadastre em Gestão → Base de produtos.',
+            });
+            setForm((f) => ({
+              ...f,
+              setor: '',
+              familia: '',
+            }));
+            return;
+          }
+          setSkuHint({
+            ok: true,
+            text: `Cadastro: ${hit.cod} — ${hit.produto} · ${hit.categoria || '—'} · ${hit.setor || '—'}${hit.familia ? ` · ${hit.familia}` : ''}`,
+          });
+          setForm((f) => {
+            const autoAntigo = ultimoProdAutoRef.current;
+            const produto =
+              !f.produto || f.produto === autoAntigo ? hit.produto || f.produto : f.produto;
+            if (hit.produto) ultimoProdAutoRef.current = hit.produto;
+            return {
+              ...f,
+              produto,
+              setor: hit.setor || '',
+              familia: hit.familia || '',
+              empresa: f.empresa || hit.empresa || '',
+            };
+          });
+        })
+        .catch((e) => {
+          if (e?.name !== 'AbortError') setSkuHint(null);
+        });
+    }, 280);
+    return () => {
+      ac.abort();
+      window.clearTimeout(t);
+    };
+  }, [modal, form.sku]);
+
   function isImageName(name: string) {
     return /\.(jpe?g|png|gif|webp|bmp)$/i.test(name);
   }
@@ -824,6 +889,8 @@ export default function HomePage() {
     setEditId(null);
     setForm({ ...emptyForm, data: new Date().toISOString().slice(0, 10) });
     setSugestao(null);
+    setSkuHint(null);
+    ultimoProdAutoRef.current = '';
     setAnexos([]);
     clearPendingFiles();
     setModal(true);
@@ -837,6 +904,8 @@ export default function HomePage() {
         .catch(() => setParecidos([]));
     }
     setEditId(r.id);
+    setSkuHint(null);
+    ultimoProdAutoRef.current = r.produto || '';
     setForm({
       ...emptyForm,
       data: r.data || '',
@@ -844,6 +913,7 @@ export default function HomePage() {
       setor: r.setor || '',
       sku: r.sku || '',
       produto: r.produto || '',
+      familia: r.familia || '',
       garantia: r.garantia || '',
       canal: r.canal || '',
       protocolo: r.protocolo || '',
@@ -3052,6 +3122,10 @@ export default function HomePage() {
                   <input value={form.sku} onChange={(e) => setF('sku', e.target.value.toUpperCase())} />
                 </div>
                 <div className="field">
+                  <label>Setor (automático)</label>
+                  <input value={form.setor} readOnly tabIndex={-1} title="Vem do cadastro do produto pelo SKU" />
+                </div>
+                <div className="field">
                   <label>Garantia</label>
                   <select value={form.garantia} onChange={(e) => setF('garantia', e.target.value)}>
                     <option>SIM</option>
@@ -3062,6 +3136,18 @@ export default function HomePage() {
                   <label>Produto</label>
                   <input value={form.produto} onChange={(e) => setF('produto', e.target.value)} />
                 </div>
+                <div className="field">
+                  <label>Família</label>
+                  <input
+                    value={form.familia}
+                    onChange={(e) => setF('familia', e.target.value.toUpperCase())}
+                  />
+                </div>
+                {skuHint ? (
+                  <p className={`hint s4 ${skuHint.ok ? 'ok' : 'aviso'}`} style={{ gridColumn: '1 / -1' }}>
+                    {skuHint.text}
+                  </p>
+                ) : null}
                 <div className="field s2">
                   <label>Devolução</label>
                   <select value={form.devolucao} onChange={(e) => setF('devolucao', e.target.value)}>
