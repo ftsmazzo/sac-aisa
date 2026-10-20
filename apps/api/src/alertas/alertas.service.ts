@@ -55,8 +55,59 @@ export class AlertasService {
       CUSTO_ALTO: `Custo alto em aberto (#${reg ?? '?'})`,
       CAUSA_OUTROS: `Causa sem classificação (#${reg ?? '?'})`,
       RASCUNHO_WHATSAPP: `Rascunho WhatsApp sem confirmação (#${reg ?? '?'})`,
+      REVISAO_RECEBIDO: `Revisar na chegada (#${reg ?? '?'})`,
     };
     return map[tipo];
+  }
+
+  /** Cartão de responsabilidade: produto/máquina chegou — setor deve revisar. */
+  async criarRevisaoRecebido(r: {
+    id: string;
+    reg: number;
+    sku?: string | null;
+    produto?: string | null;
+    cliente?: string | null;
+    dataRecebimento?: string | null;
+    setorRespManual?: string | null;
+    causaId?: string | null;
+    causaManual?: boolean | null;
+    reclamacao?: string | null;
+    laudo?: string | null;
+    solucao?: string | null;
+  }) {
+    const causa = causaDe(r);
+    const setorResp = (r.setorRespManual || '').trim() || causa.setor;
+    const data = r.dataRecebimento || new Date().toISOString().slice(0, 10);
+    const sku = (r.sku || '').trim() || 'sem SKU';
+    const prod = (r.produto || '').trim();
+    return this.upsertAlerta({
+      tipo: 'REVISAO_RECEBIDO',
+      chaveDedupe: `REVISAO_RECEBIDO:${r.id}`,
+      mensagem:
+        `Produto recebido em ${data}. ` +
+        `${sku}${prod ? ` — ${prod}` : ''} · ${r.cliente || 'cliente'}. ` +
+        `Causa: ${causa.nome}. Agendar revisão / tratativa do setor.`,
+      reclamacaoId: r.id,
+      setorResp,
+      reg: r.reg,
+      meta: {
+        dataRecebimento: data,
+        sku,
+        causaId: causa.id,
+        acao: causa.acao,
+      },
+    });
+  }
+
+  async resolverRevisaoDaReclamacao(reclamacaoId: string) {
+    await this.prisma.alerta.updateMany({
+      where: {
+        reclamacaoId,
+        tipo: 'REVISAO_RECEBIDO',
+        status: { in: ['aberto', 'enviado'] },
+      },
+      data: { status: 'resolvido', resolvidoEm: new Date() },
+    });
   }
 
   async upsertAlerta(params: {
