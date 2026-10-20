@@ -33,28 +33,115 @@ function addDaysIso(iso: string, delta: number): string {
   return dt.toISOString().slice(0, 10);
 }
 
-/** Converte preset de período em { de, ate } (datas YYYY-MM-DD, fuso BR). */
-export function resolverPeriodo(preset?: string, de?: string, ate?: string): { de: string; ate: string; label: string } {
+/** Normaliza texto p/ match de setor (sem acento, minúsculo). */
+export function normTxt(s: string): string {
+  return String(s || '')
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s/]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Stem grosseiro PT: embalagens→embalagem, expedicoes→expedicao. */
+function stemPt(t: string): string {
+  let x = normTxt(t);
+  if (x.endsWith('agens')) return x.slice(0, -5) + 'agem';
+  if (x.endsWith('acoes')) return x.slice(0, -5) + 'acao';
+  if (x.endsWith('coes')) return x.slice(0, -4) + 'cao';
+  if (x.endsWith('oes')) return x.slice(0, -3) + 'ao';
+  if (x.endsWith('ais')) return x.slice(0, -3) + 'al';
+  if (x.endsWith('ns') && x.length > 4) return x.slice(0, -1);
+  if (x.endsWith('s') && x.length > 4) return x.slice(0, -1);
+  return x;
+}
+
+/** “Embalagens” casa com “Embalagem / Expedição”. */
+export function setorFuzzyMatch(nomeSetor: string, query: string): boolean {
+  const a = normTxt(nomeSetor);
+  const b = normTxt(query);
+  if (!a || !b) return false;
+  if (a === b || a.includes(b) || b.includes(a)) return true;
+  const tokensA = a.split(/[\s/]+/).map(stemPt).filter((t) => t.length >= 3);
+  const tokensB = b.split(/[\s/]+/).map(stemPt).filter((t) => t.length >= 3);
+  if (!tokensB.length) return false;
+  // ignora ruído (“setor”, “de”, “da”)
+  const stop = new Set(['setor', 'de', 'da', 'do', 'dos', 'das', 'e', 'ou']);
+  const q = tokensB.filter((t) => !stop.has(t));
+  if (!q.length) return false;
+  return q.every((tb) =>
+    tokensA.some((ta) => {
+      if (ta === tb) return true;
+      if (ta.includes(tb) || tb.includes(ta)) return true;
+      const n = Math.min(6, ta.length, tb.length);
+      return n >= 5 && ta.slice(0, n) === tb.slice(0, n);
+    }),
+  );
+}
+
+/**
+ * Converte preset / N dias / de-até em datas YYYY-MM-DD (fuso BR).
+ * Aceita: hoje, ontem, semana, 15d, 30d, 45d, "últimos 45 dias", dias=45.
+ */
+export function resolverPeriodo(
+  preset?: string,
+  de?: string,
+  ate?: string,
+  dias?: number,
+): { de: string; ate: string; label: string } {
   const hoje = isoHojeBr();
   if (de || ate) {
-    return { de: de || ate || hoje, ate: ate || de || hoje, label: `${de || '?'} → ${ate || '?'}` };
+    const d0 = de || ate || hoje;
+    const d1 = ate || de || hoje;
+    return { de: d0, ate: d1, label: `${d0} → ${d1}` };
   }
+
+  const clampDias = (n: number) => Math.min(Math.max(Math.floor(n), 1), 365);
+
+  if (Number.isFinite(dias) && (dias as number) > 0) {
+    const n = clampDias(dias as number);
+    return { de: addDaysIso(hoje, -(n - 1)), ate: hoje, label: `últimos ${n} dias` };
+  }
+
   const p = (preset || 'hoje').toLowerCase().trim();
+
+  // "45d", "45dias", "ultimos 45 dias", "últimos 45 dias"
+  const m =
+    p.match(/^(\d+)\s*d(?:ias)?$/) ||
+    p.match(/^(?:ultimos|últimos)\s+(\d+)\s*d(?:ias)?$/) ||
+    p.match(/^(\d+)\s*dias?$/);
+  if (m) {
+    const n = clampDias(Number(m[1]));
+    return { de: addDaysIso(hoje, -(n - 1)), ate: hoje, label: `últimos ${n} dias` };
+  }
+
   if (p === 'hoje' || p === 'today') return { de: hoje, ate: hoje, label: 'hoje' };
   if (p === 'ontem' || p === 'yesterday') {
     const o = addDaysIso(hoje, -1);
     return { de: o, ate: o, label: 'ontem' };
   }
-  if (p === 'semana' || p === '7d' || p === '7dias' || p === 'últimos 7 dias' || p === 'ultimos 7 dias') {
+  if (p === 'semana' || p === '7d' || p === '7dias' || p.includes('7 dia')) {
     return { de: addDaysIso(hoje, -6), ate: hoje, label: 'últimos 7 dias' };
   }
-  if (p === '15d' || p === '15dias' || p === 'últimos 15 dias' || p === 'ultimos 15 dias') {
+  if (p === '15d' || p === '15dias' || p.includes('15 dia')) {
     return { de: addDaysIso(hoje, -14), ate: hoje, label: 'últimos 15 dias' };
   }
-  if (p === '30d' || p === '30dias' || p === 'mes' || p === 'mês' || p === 'ultimos 30 dias' || p === 'últimos 30 dias') {
+  if (
+    p === '30d' ||
+    p === '30dias' ||
+    p === 'mes' ||
+    p === 'mês' ||
+    p.includes('30 dia') ||
+    p.includes('esse mes') ||
+    p.includes('este mes') ||
+    p.includes('esse mês') ||
+    p.includes('este mês')
+  ) {
     return { de: addDaysIso(hoje, -29), ate: hoje, label: 'últimos 30 dias' };
   }
-  return { de: hoje, ate: hoje, label: 'hoje (padrão)' };
+  // preset desconhecido: NÃO cair em "hoje" (gera alucinação de “não há dados”)
+  return { de: addDaysIso(hoje, -29), ate: hoje, label: 'últimos 30 dias (padrão)' };
 }
 
 export const GESTOR_TOOL_DEFS: GestorToolDef[] = [
@@ -72,16 +159,20 @@ export const GESTOR_TOOL_DEFS: GestorToolDef[] = [
     function: {
       name: 'periodo_resolver',
       description:
-        'Converte linguagem de período em datas {de, ate} no fuso America/Sao_Paulo. Use ANTES de listar/KPI quando o gestor disser hoje, ontem, semana, 15 dias, 30 dias. Não invente datas: use preset ou de/ate explícitos. Não lista reclamações.',
+        'Converte período em {de, ate} (America/Sao_Paulo). Use ANTES de listar/KPI. Aceita hoje, ontem, semana, 15d, 30d, 45d, “últimos N dias”, ou o número em dias. NÃO invente datas. Preferir dias=N quando o gestor disser “últimos 45 dias”.',
       parameters: {
         type: 'object',
         properties: {
           preset: {
             type: 'string',
-            description: 'hoje | ontem | semana | 15d | 30d',
+            description: 'hoje | ontem | semana | 15d | 30d | 45d | ultimos 45 dias | etc.',
           },
-          de: { type: 'string', description: 'Data início YYYY-MM-DD (opcional se tiver preset)' },
-          ate: { type: 'string', description: 'Data fim YYYY-MM-DD (opcional se tiver preset)' },
+          dias: {
+            type: 'number',
+            description: 'N últimos dias (1–365). Ex.: 45 para “últimos 45 dias”. Preferir este campo.',
+          },
+          de: { type: 'string', description: 'YYYY-MM-DD início (opcional)' },
+          ate: { type: 'string', description: 'YYYY-MM-DD fim (opcional)' },
         },
         additionalProperties: false,
       },
@@ -170,13 +261,13 @@ export const GESTOR_TOOL_DEFS: GestorToolDef[] = [
     function: {
       name: 'setor_resumo',
       description:
-        'Resumo por setor responsável. Sem nome: ranking de setores. Com nome: detalhe daquele setor (fuzzy). Use para “embalagem”, “setores críticos”.',
+        'Resumo por setor responsável (match fuzzy: “Embalagens” = “Embalagem / Expedição”). Sem nome: ranking. Com nome: detalhe + candidatos se ambíguo. Nunca diga que o setor não existe sem olhar setores_disponiveis no retorno.',
       parameters: {
         type: 'object',
         properties: {
           de: { type: 'string' },
           ate: { type: 'string' },
-          nome: { type: 'string', description: 'Nome parcial do setor (opcional)' },
+          nome: { type: 'string', description: 'Nome parcial do setor (ex.: Embalagens)' },
         },
         required: ['de', 'ate'],
         additionalProperties: false,
@@ -271,6 +362,11 @@ export class GestorToolsService {
             typeof args.preset === 'string' ? args.preset : undefined,
             this.dataOk(args.de) ? args.de : undefined,
             this.dataOk(args.ate) ? args.ate : undefined,
+            typeof args.dias === 'number'
+              ? args.dias
+              : typeof args.dias === 'string' && args.dias.trim()
+                ? Number(args.dias)
+                : undefined,
           );
         case 'reclamacoes_listar': {
           const d = this.datasOuErro(args);
@@ -344,12 +440,12 @@ export class GestorToolsService {
     if (args.setor) query.resp = String(args.setor);
 
     let rows = await this.reclamacoes.list(query);
-    // Se resp exige match exato e veio vazio com setor fuzzy, tenta filtrar por includes
-    if (args.setor && rows.length === 0) {
-      const all = await this.reclamacoes.list({ de, ate, limit: '80', ordem: 'data_desc' });
-      const needle = String(args.setor).toLowerCase();
+    // Match de setor é exato no list(); se veio setor, sempre reforça com fuzzy
+    if (args.setor) {
+      const all = await this.reclamacoes.list({ de, ate, limit: '200', ordem: 'data_desc' });
+      const needle = String(args.setor);
       rows = all
-        .filter((r) => String((r as { setorResp?: string }).setorResp || '').toLowerCase().includes(needle))
+        .filter((r) => setorFuzzyMatch(String((r as { setorResp?: string }).setorResp || ''), needle))
         .slice(0, 15);
     }
 
@@ -440,23 +536,51 @@ export class GestorToolsService {
 
   private async setorResumo(de: string, ate: string, nome: string) {
     const k = await this.reclamacoes.kpis({ de, ate });
+    const ranking = (k.direcionamento || []).map((g) => ({ nome: g.k, n: g.n, custo: g.custo }));
     if (!nome) {
+      return { de, ate, setores: ranking.slice(0, 10) };
+    }
+
+    const match = ranking.filter((g) => setorFuzzyMatch(g.nome, nome));
+    if (!match.length) {
       return {
         de,
         ate,
-        setores: (k.direcionamento || []).slice(0, 10).map((g) => ({ nome: g.k, n: g.n, custo: g.custo })),
+        filtro: nome,
+        encontrado: false,
+        mensagem:
+          `Nenhum setor casou com "${nome}". Use um dos nomes oficiais abaixo (não diga que não há reclamações no período).`,
+        setores_disponiveis: ranking.slice(0, 12),
       };
     }
-    const needle = nome.toLowerCase();
-    const match = (k.direcionamento || []).filter((g) => g.k.toLowerCase().includes(needle));
-    const detalhe = await this.reclamacoes.kpis({ de, ate, resp: match[0]?.k || nome });
+
+    // Agrega matches fuzzy (pode haver 1+ nomes oficiais)
+    const nomesOficiais = match.map((m) => m.nome);
+    const n = match.reduce((a, m) => a + m.n, 0);
+    const custo = match.reduce((a, m) => a + m.custo, 0);
+
+    // Amostra + causas no recorte fuzzy (sem exigir match exato de resp)
+    const amostra = await this.reclamacoesListar({ de, ate, setor: nome, limit: '10' });
+    const detalhePrimario = await this.reclamacoes.kpis({ de, ate, resp: nomesOficiais[0] });
+
     return {
       de,
       ate,
       filtro: nome,
-      matches: match.slice(0, 5),
-      totais: detalhe.totais,
-      top_causas: (detalhe.porCausa || []).slice(0, 5).map((g) => ({ nome: g.k, n: g.n })),
+      encontrado: true,
+      nomes_oficiais: nomesOficiais,
+      totais: {
+        n,
+        custo,
+        // detalhe do principal (se um só match); se vários, n agregado acima
+        aguardando: match.length === 1 ? detalhePrimario.totais.aguardando : undefined,
+        tratativa: match.length === 1 ? detalhePrimario.totais.tratativa : undefined,
+        resolvida: match.length === 1 ? detalhePrimario.totais.resolvida : undefined,
+        tempoMedio: match.length === 1 ? detalhePrimario.totais.tempoMedio : undefined,
+      },
+      por_nome: match,
+      top_causas: (detalhePrimario.porCausa || []).slice(0, 5).map((g) => ({ nome: g.k, n: g.n })),
+      amostra: (amostra as { itens?: unknown[] }).itens || [],
     };
   }
 
