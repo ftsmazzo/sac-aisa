@@ -328,17 +328,44 @@ export function classificar(r: ReclamacaoLike): string {
   return classificarTodas(r, 1)[0] || 'outros';
 }
 
-/** Todas as causas que batem no texto (máx. 5). Útil para amassado + elétrico etc. */
+/**
+ * Causas genéricas/catch-all: se alguma específica da família já entrou, omitir a genérica.
+ * Ex.: kit + item → só kit; voltagem + erro_envio → só voltagem.
+ * Não suprime pares legítimos (avaria + eletrico = amassado e falha elétrica).
+ */
+const GENERICA_SUPRIMIDA_POR: Record<string, readonly string[]> = {
+  item: ['kit', 'unidade'],
+  erro_envio: ['voltagem', 'cubas'],
+  defeito: [
+    'manipulo',
+    'eletrico',
+    'furacao',
+    'cuba_furada',
+    'solda',
+    'ferrugem',
+    'pintura',
+    'avaria',
+  ],
+  // "quebrado" no texto do manípulo também dispara avaria; manípulo é o motivo certo
+  avaria: ['manipulo'],
+};
+
+/** Todas as causas que batem no texto (máx. 5), sem genéricas redundantes. */
 export function classificarTodas(r: ReclamacaoLike, max = 5): string[] {
   const L = stripAcc(U(r.laudo));
   const T = stripAcc(U(`${r.reclamacao || ''} ${r.solucao || ''}`));
-  const ids: string[] = [];
+  const brutos: string[] = [];
   for (const c of CAUSAS) {
     if (c.id === 'outros') continue;
-    if (c.t(L, T)) ids.push(c.id);
-    if (ids.length >= max) break;
+    if (c.t(L, T)) brutos.push(c.id);
   }
-  return ids.length ? ids : ['outros'];
+  const ids = brutos.filter((id) => {
+    const especificas = GENERICA_SUPRIMIDA_POR[id];
+    if (!especificas) return true;
+    return !especificas.some((esp) => brutos.includes(esp));
+  });
+  const cortados = ids.slice(0, max);
+  return cortados.length ? cortados : ['outros'];
 }
 
 const PECAS: [string, RegExp][] = [

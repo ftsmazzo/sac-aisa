@@ -5,6 +5,7 @@ import {
   custoTotal,
   tempoDe,
   classificar,
+  classificarTodas,
   detectarPeca,
   avaliarAlertasReclamacao,
   comandoRetorno,
@@ -55,6 +56,31 @@ test('classificar detecta peça faltando', () => {
     }),
     'kit',
   );
+});
+
+test('classificarTodas: kit sem item genérico redundante', () => {
+  const ids = classificarTodas({
+    laudo: 'FALTANDO PEÇAS/ACESSÓRIOS',
+    reclamacao: 'FALTOU OS PARAFUSOS',
+  });
+  assert.ok(ids.includes('kit'));
+  assert.equal(ids.includes('item'), false);
+});
+
+test('classificarTodas: amassado + elétrico mantém os dois', () => {
+  const ids = classificarTodas({
+    reclamacao: 'Produto chegou amassado e não liga',
+  });
+  assert.ok(ids.includes('avaria'), `esperava avaria em ${ids.join(',')}`);
+  assert.ok(ids.includes('eletrico'), `esperava eletrico em ${ids.join(',')}`);
+});
+
+test('classificarTodas: manípulo quebrado não duplica avaria', () => {
+  const ids = classificarTodas({
+    reclamacao: 'Manípulo quebrado na máquina de corte',
+  });
+  assert.ok(ids.includes('manipulo'));
+  assert.equal(ids.includes('avaria'), false);
 });
 
 test('detectarPeca encontra parafusos', () => {
