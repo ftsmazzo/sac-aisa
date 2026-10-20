@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Param, Post, Req, Res } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Req, Res, StreamableFile } from '@nestjs/common';
 import { Response } from 'express';
+import { createReadStream } from 'fs';
 import { Roles, Require } from '../auth/auth.guard';
 import { AuthUser } from '../auth/auth.types';
 import { AuditoriaService } from '../auditoria.service';
@@ -7,6 +8,7 @@ import { PermissoesService } from '../permissoes/permissoes.service';
 import { BackupService } from './backup.service';
 import { RedisService } from '../infra/redis.service';
 import { PrismaService } from '../prisma.service';
+
 
 @Controller('admin')
 export class AdminController {
@@ -28,11 +30,46 @@ export class AdminController {
     } catch {
       db = 'erro';
     }
+    const lista = this.backup.listar();
     return {
       db,
       redis: await this.redis.ping(),
       filaPendentes: await this.prisma.filaTarefa.count({ where: { status: 'pendente' } }),
+      ultimoBackup: lista.ultimo,
     };
+  }
+
+  @Roles('master')
+  @Require('admin.backup')
+  @Get('backups')
+  listarBackups() {
+    return this.backup.listar();
+  }
+
+  @Roles('master')
+  @Require('admin.backup')
+  @Post('backups')
+  async criarBackup(@Req() req: { user: AuthUser }) {
+    const item = await this.backup.criar(req.user.login);
+    await this.auditoria.registrar({
+      user: req.user.login,
+      nome: req.user.nome,
+      perfil: req.user.perfil,
+      acao: 'gerou dump',
+      alvo: 'Admin',
+      detalhe: `${item.nome} · ${item.tamanhoLabel}`,
+    });
+    return { ok: true, backup: item, ...this.backup.listar() };
+  }
+
+  @Roles('master')
+  @Require('admin.backup')
+  @Get('backups/:nome/download')
+  baixarBackup(@Param('nome') nome: string, @Res({ passthrough: true }) res: Response) {
+    const path = this.backup.caminhoDownload(nome);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${nome}"`);
+    return new StreamableFile(createReadStream(path));
   }
 
   @Roles('master')
@@ -91,20 +128,21 @@ export class AdminController {
     return r;
   }
 
+  /** JSON legado (Dropbox) — não é o dump completo. */
   @Roles('master')
   @Require('admin.backup')
   @Post('backup')
-  async gerarBackup(@Req() req: { user: AuthUser }, @Res() res: Response) {
-    const data = await this.backup.gerar();
+  async gerarBackupJsonLegado(@Req() req: { user: AuthUser }, @Res() res: Response) {
+    const data = await this.backup.gerarJsonLegado();
     await this.auditoria.registrar({
       user: req.user.login,
       nome: req.user.nome,
       perfil: req.user.perfil,
-      acao: 'gerou backup',
+      acao: 'gerou backup json legado',
       alvo: 'Admin',
       detalhe: JSON.stringify(data.meta.contagens),
     });
-    const nome = `sac-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    const nome = `sac-legado-${new Date().toISOString().slice(0, 10)}.json`;
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${nome}"`);
     res.send(JSON.stringify(data, null, 2));

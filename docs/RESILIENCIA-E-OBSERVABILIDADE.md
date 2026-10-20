@@ -1,62 +1,43 @@
 # Resiliência, backup e observabilidade
 
-## Status das 4 ondas
+## Controle de backup no SAC (cliente)
 
-| Onda | Status | O que falta no EasyPanel (ops) |
-|---|---|---|
-| A · Permissões Admin | Pronto no código | Deploy API+Web |
-| B · Backup fácil | Botão **Backup agora** pronto | Ativar snapshot diário do Postgres no painel |
-| C · Lista não trava | Filtro no SQL + sem fotos na lista + limite 500 | — |
-| D · Endurecer | Rate limit login/webhook + `/health` + Glitchtip opcional | Colocar `SENTRY_DSN` e monitor no Uptime Kuma |
+No app: **Admin → saúde e backups** (master com permissão `admin.backup`):
 
-## Restore em banco secundário
+1. Vê o **último backup** e a **lista** de dumps no servidor.
+2. Clica **Gerar backup agora** → `pg_dump` grava `sac-YYYYMMDD-HHMMSS.dump` em `/data/backups`.
+3. Clica **Baixar** na linha desejada.
 
-Não é besteira. É o jeito certo.
+Isso é a garantia visível para o cliente. Os arquivos ficam no volume `backups` da API (não somem no download do browser).
 
-1. Mantenha o Postgres principal (`sac_aisa`) só para produção.
-2. Crie no EasyPanel um segundo Postgres (ou use o serviço `postgres_restore` do compose com profile `restore`).
-3. Gere o backup pelo Admin → **Backup agora** (JSON operacional) e/ou o snapshot diário do EasyPanel.
-4. Restaure **só** no banco secundário e valide login, lista de reclamações e um KPI.
-5. Só depois, se estiver certo, planeje a troca do principal em janela curta.
+Restore de um `.dump` (ops):
 
-Nunca teste restore apontando a API de produção para o banco de restore.
+```bash
+pg_restore --clean --if-exists --no-owner --dbname="$DATABASE_URL" sac-XXXXXXXX-XXXXXX.dump
+```
+
+Faça restore preferencialmente num Postgres de teste, nunca no principal sem validar.
+
+Retenção local: últimos 20 dumps (`BACKUP_RETENTION`).
+
+## EasyPanel (camada extra)
+
+Agenda noturna do Postgres + volume `anexos` no projeto `sac-aisa` (painel). Complementa o controle do Admin; não substitui a lista no app.
+
+## JSON legado (Dropbox)
+
+Export/import JSON na aba Dados é resquício da versão Dropbox: incompleto (sem senhas, sem WhatsApp, fotos só metadado). **Não use como backup oficial.**
 
 ## Redis
 
 - Variável: `REDIS_URL=redis://<host-interno>:6379`
-- Se faltar, a API sobe normalmente e a fila usa só a tabela `fila_tarefas` no Postgres.
-- No EasyPanel: crie um serviço Redis no mesmo projeto do SAC e cole a URL interna na API.
+- Se faltar, a API sobe e a fila usa `fila_tarefas` no Postgres.
 
 ## Uptime Kuma
 
-Vale a pena. Configure um monitor HTTP(s):
-
-- URL: `https://<sua-api>/health`
-- Método: GET
-- Intervalo: 60s
-- Keyword ou JSON: `"ok":true`
-
-Se `checks.db` vier `erro`, o health ainda responde, mas `ok` fica `false` — o Kuma alerta.
+- URL: `https://sac-aisa-api.se860g.easypanel.host/health`
+- Keyword/JSON: `"ok":true`
 
 ## Glitchtip
 
-Vale a pena na API. É o Sentry open-source que você já usa em outros projetos.
-
-1. Crie um projeto no Glitchtip para o SAC.
-2. Copie o DSN para a variável de ambiente da API:
-
-```env
-SENTRY_DSN=https://...@seu-glitchtip.../...
-```
-
-3. Redeploy da API. Nos logs deve aparecer `Glitchtip/Sentry ativo`.
-4. Use para erros 500 — uptime continua no Uptime Kuma (`GET /health`).
-
-## Backup automático no EasyPanel (onda B restante)
-
-No serviço Postgres do SAC: ative backup/snapshot diário com retenção (ex.: 7 dias). Isso é configuração do painel, não do código.
-
-## Backup fácil
-
-- Botão **Backup agora** (master, Admin): baixa JSON com usuários (sem hash), reclamações, produtos, vendas, configs e permissões.
-- Mantenha também o backup automático do volume Postgres no EasyPanel (7 diários + 4 semanais).
+- `SENTRY_DSN` na API. Nos logs: `Glitchtip/Sentry ativo`.

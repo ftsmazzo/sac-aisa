@@ -402,7 +402,13 @@ export default function HomePage() {
     db: string;
     redis: string;
     filaPendentes: number;
+    ultimoBackup?: { nome: string; criadoEm: string; tamanhoLabel: string } | null;
   } | null>(null);
+  const [adminBackups, setAdminBackups] = useState<{
+    ultimo: { nome: string; criadoEm: string; tamanhoLabel: string } | null;
+    backups: { nome: string; criadoEm: string; tamanhoLabel: string; tamanhoBytes: number }[];
+  } | null>(null);
+  const [adminBackupBusy, setAdminBackupBusy] = useState(false);
   const [adminBusy, setAdminBusy] = useState(false);
   const [novoPlano, setNovoPlano] = useState({
     titulo: '',
@@ -627,18 +633,24 @@ export default function HomePage() {
   useEffect(() => {
     if (tab !== 'admin' || !canAdmin()) return;
     const ac = new AbortController();
-    Promise.all([
-      api<UsuarioRow[]>('/gestao/usuarios', { signal: ac.signal }),
-      api<{ db: string; redis: string; filaPendentes: number }>('/admin/status', { signal: ac.signal }),
-    ])
-      .then(([users, status]) => {
-        if (ac.signal.aborted) return;
-        setAdminUsuarios(users);
-        setAdminStatus(status);
-      })
-      .catch((e) => {
-        if (e?.name !== 'AbortError') setMsg(e.message);
-      });
+    const tasks: Promise<unknown>[] = [
+      api<UsuarioRow[]>('/gestao/usuarios', { signal: ac.signal }).then((users) => {
+        if (!ac.signal.aborted) setAdminUsuarios(users);
+      }),
+      api<NonNullable<typeof adminStatus>>('/admin/status', { signal: ac.signal }).then((status) => {
+        if (!ac.signal.aborted) setAdminStatus(status);
+      }),
+    ];
+    if (user?.perfil === 'master' || user?.permissoes?.includes('admin.backup')) {
+      tasks.push(
+        api<NonNullable<typeof adminBackups>>('/admin/backups', { signal: ac.signal }).then((b) => {
+          if (!ac.signal.aborted) setAdminBackups(b);
+        }),
+      );
+    }
+    Promise.all(tasks).catch((e) => {
+      if (e?.name !== 'AbortError') setMsg(e.message);
+    });
     return () => ac.abort();
   }, [tab, user?.perfil, user?.permissoes]);
 
@@ -2654,13 +2666,23 @@ export default function HomePage() {
 
         {tab === 'dados' ? (
           <div className="card">
-            <h3>Dados / Backup</h3>
-            <p className="muted">Importa o JSON legado para o Postgres (EasyPanel).</p>
+            <h3>Dados</h3>
+            <p className="muted">
+              Backups completos ficam em <b>Admin → Gerar backup agora</b> (dump do Postgres). Os botões
+              abaixo são só JSON legado (migração antiga / Dropbox) — não use como garantia.
+            </p>
             <div className="tools">
-              {ehGestor ? (
+              {ehGestor && can('dados.importar') ? (
                 <button
-                  className="primary"
+                  className="small"
                   onClick={async () => {
+                    if (
+                      !window.confirm(
+                        'Importar JSON legado? Isso pode sobrescrever reclamações. Prefira restore do .dump.',
+                      )
+                    ) {
+                      return;
+                    }
                     const res = await api<{ reclamacoes: number }>('/dados/importar-backup', {
                       method: 'POST',
                       json: {},
@@ -2669,24 +2691,27 @@ export default function HomePage() {
                     await refresh();
                   }}
                 >
-                  Importar backup
+                  Importar JSON legado
                 </button>
               ) : null}
-              <button
-                onClick={async () => {
-                  const data = await api('/dados/exportar-backup', { method: 'POST' });
-                  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-                  const a = document.createElement('a');
-                  a.href = URL.createObjectURL(blob);
-                  a.download = `sac_backup_${new Date().toISOString().slice(0, 10)}.json`;
-                  a.click();
-                }}
-              >
-                Exportar backup
-              </button>
+              {can('dados.exportar') ? (
+                <button
+                  className="small"
+                  onClick={async () => {
+                    const data = await api('/dados/exportar-backup', { method: 'POST' });
+                    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = `sac_legado_${new Date().toISOString().slice(0, 10)}.json`;
+                    a.click();
+                  }}
+                >
+                  Exportar JSON legado
+                </button>
+              ) : null}
             </div>
             <p className="muted">
-              Evolution API webhook: <code>/whatsapp/webhook/evolution</code>
+              Evolution webhook: <code>/whatsapp/webhook/evolution</code>
             </p>
           </div>
         ) : null}
@@ -2694,10 +2719,11 @@ export default function HomePage() {
         {tab === 'admin' && can('admin.ver') ? (
           <>
             <div className="card">
-              <h3>Admin · saúde e backup</h3>
+              <h3>Admin · saúde e backups</h3>
               <p className="muted">
-                Backup operacional em JSON (sem senhas). Restaure primeiro num Postgres secundário — veja
-                docs/RESILIENCIA-E-OBSERVABILIDADE.md.
+                Dumps reais do Postgres (arquivo <code>.dump</code>), guardados no servidor. Você vê a
+                lista, gera um novo e baixa quando quiser. Isso é a garantia do cliente — não depende
+                só do EasyPanel.
               </p>
               <div className="tools">
                 <button
@@ -2718,30 +2744,24 @@ export default function HomePage() {
                   <button
                     type="button"
                     className="primary"
+                    disabled={adminBackupBusy}
                     onClick={async () => {
+                      setAdminBackupBusy(true);
                       try {
-                        const token = localStorage.getItem('sac_token') || '';
-                        const res = await fetch(
-                          `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/admin/backup`,
-                          {
-                            method: 'POST',
-                            headers: token ? { Authorization: `Bearer ${token}` } : {},
-                          },
+                        const r = await api<NonNullable<typeof adminBackups> & { backup: { nome: string } }>(
+                          '/admin/backups',
+                          { method: 'POST' },
                         );
-                        if (!res.ok) throw new Error(`Erro ${res.status}`);
-                        const blob = await res.blob();
-                        const a = document.createElement('a');
-                        a.href = URL.createObjectURL(blob);
-                        a.download = `sac-backup-${new Date().toISOString().slice(0, 10)}.json`;
-                        a.click();
-                        URL.revokeObjectURL(a.href);
-                        setMsg('Backup baixado. Teste o restore num banco secundário.');
+                        setAdminBackups({ ultimo: r.ultimo, backups: r.backups });
+                        setMsg(`Backup gerado: ${r.backup?.nome || r.ultimo?.nome}`);
                       } catch (e) {
-                        setMsg(e instanceof Error ? e.message : 'Falha no backup');
+                        setMsg(e instanceof Error ? e.message : 'Falha ao gerar dump');
+                      } finally {
+                        setAdminBackupBusy(false);
                       }
                     }}
                   >
-                    Backup agora
+                    {adminBackupBusy ? 'Gerando dump…' : 'Gerar backup agora'}
                   </button>
                 ) : null}
               </div>
@@ -2749,7 +2769,81 @@ export default function HomePage() {
                 <p>
                   Banco: <b>{adminStatus.db}</b> · Redis: <b>{adminStatus.redis}</b> · Fila pendente:{' '}
                   <b>{adminStatus.filaPendentes}</b>
+                  {adminStatus.ultimoBackup || adminBackups?.ultimo ? (
+                    <>
+                      {' '}
+                      · Último backup:{' '}
+                      <b>
+                        {(adminBackups?.ultimo || adminStatus.ultimoBackup)?.nome} (
+                        {(adminBackups?.ultimo || adminStatus.ultimoBackup)?.tamanhoLabel})
+                      </b>
+                    </>
+                  ) : (
+                    <>
+                      {' '}
+                      · Último backup: <b>nenhum ainda</b>
+                    </>
+                  )}
                 </p>
+              ) : null}
+              {can('admin.backup') ? (
+                <div className="tablewrap" style={{ marginTop: 12 }}>
+                  <table className="list">
+                    <thead>
+                      <tr>
+                        <th>Arquivo</th>
+                        <th>Quando (UTC)</th>
+                        <th>Tamanho</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(adminBackups?.backups || []).length ? (
+                        adminBackups!.backups.map((b) => (
+                          <tr key={b.nome}>
+                            <td>
+                              <code>{b.nome}</code>
+                            </td>
+                            <td>{new Date(b.criadoEm).toLocaleString('pt-BR')}</td>
+                            <td>{b.tamanhoLabel}</td>
+                            <td>
+                              <button
+                                type="button"
+                                className="small"
+                                onClick={async () => {
+                                  try {
+                                    const token = localStorage.getItem('sac_token') || '';
+                                    const res = await fetch(
+                                      `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/admin/backups/${encodeURIComponent(b.nome)}/download`,
+                                      { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+                                    );
+                                    if (!res.ok) throw new Error(`Erro ${res.status}`);
+                                    const blob = await res.blob();
+                                    const a = document.createElement('a');
+                                    a.href = URL.createObjectURL(blob);
+                                    a.download = b.nome;
+                                    a.click();
+                                    URL.revokeObjectURL(a.href);
+                                  } catch (e) {
+                                    setMsg(e instanceof Error ? e.message : 'Falha no download');
+                                  }
+                                }}
+                              >
+                                Baixar
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={4} className="muted">
+                            Nenhum dump na lista. Clique em <b>Gerar backup agora</b>.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               ) : null}
             </div>
 
