@@ -7,4 +7,6 @@ export interface JwtPayload {
   perfil: Perfil;
 }
 
-export interface AuthUser extends JwtPayload {}
+export interface AuthUser extends JwtPayload {
+  permissoes?: string[];
+}

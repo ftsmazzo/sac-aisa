@@ -22,15 +22,38 @@ import { QualidadeService } from './qualidade/qualidade.service';
 import { PoliticaService } from './evolucao/politica.service';
 import { EvolucaoService } from './evolucao/evolucao.service';
 import { EvolucaoController } from './evolucao/evolucao.controller';
+import { PermissoesService } from './permissoes/permissoes.service';
+import { AdminController } from './admin/admin.controller';
+import { BackupService } from './admin/backup.service';
+import { RedisService } from './infra/redis.service';
+import { FilaService } from './infra/fila.service';
 import { Controller, Get } from '@nestjs/common';
 import { Public } from './auth/auth.guard';
 
 @Controller()
 class HealthController {
+  constructor(
+    private prisma: PrismaService,
+    private redis: RedisService,
+  ) {}
+
   @Public()
   @Get('health')
-  health() {
-    return { ok: true, sistema: 'AISA SAC', ts: new Date().toISOString() };
+  async health() {
+    let db: 'ok' | 'erro' = 'ok';
+    try {
+      await this.prisma.$queryRaw`SELECT 1`;
+    } catch {
+      db = 'erro';
+    }
+    const redis = await this.redis.ping();
+    const ok = db === 'ok';
+    return {
+      ok,
+      sistema: 'AISA SAC',
+      ts: new Date().toISOString(),
+      checks: { db, redis },
+    };
   }
 }
 
@@ -54,6 +77,7 @@ class HealthController {
     DadosController,
     QualidadeController,
     EvolucaoController,
+    AdminController,
   ],
   providers: [
     PrismaService,
@@ -66,6 +90,10 @@ class HealthController {
     QualidadeService,
     PoliticaService,
     EvolucaoService,
+    PermissoesService,
+    BackupService,
+    RedisService,
+    FilaService,
     { provide: APP_GUARD, useClass: AuthGuard },
   ],
 })

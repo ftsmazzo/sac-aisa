@@ -14,6 +14,7 @@ import { PrismaService } from '../prisma.service';
 import { AuditoriaService } from '../auditoria.service';
 import { Public } from './auth.guard';
 import { AuthUser } from './auth.types';
+import { PermissoesService } from '../permissoes/permissoes.service';
 
 function hashLegado(salt: string, senha: string) {
   return createHash('sha256').update(`${salt}:${senha}`).digest('hex');
@@ -25,6 +26,7 @@ export class AuthController {
     private prisma: PrismaService,
     private jwt: JwtService,
     private auditoria: AuditoriaService,
+    private permissoes: PermissoesService,
   ) {}
 
   @Public()
@@ -68,6 +70,7 @@ export class AuthController {
 
     const payload = { sub: u.id, login: u.login, nome: u.nome, perfil: u.perfil };
     const token = await this.jwt.signAsync(payload);
+    const permissoes = await this.permissoes.listaDoUsuario(u.id, u.perfil);
     await this.auditoria.registrar({
       user: u.login,
       nome: u.nome,
@@ -75,12 +78,13 @@ export class AuthController {
       acao: 'login',
       alvo: 'Sistema',
     });
-    return { token, user: payload };
+    return { token, user: { ...payload, permissoes } };
   }
 
   @Get('me')
-  me(@Req() req: { user: AuthUser }) {
-    return { user: req.user };
+  async me(@Req() req: { user: AuthUser }) {
+    const permissoes = await this.permissoes.listaDoUsuario(req.user.sub, req.user.perfil);
+    return { user: { ...req.user, permissoes } };
   }
 
   @Post('senha')

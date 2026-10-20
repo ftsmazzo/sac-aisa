@@ -545,3 +545,87 @@ export const CAUSAS_SEGURANCA = [
 export function sinalSeguranca(causaId?: string | null): boolean {
   return (CAUSAS_SEGURANCA as readonly string[]).includes(String(causaId || ''));
 }
+
+/** Telas e ações do painel — chave = tela.acao */
+export const PERMISSOES_CATALOGO = [
+  { chave: 'triagem.ver', tela: 'Triagem', acao: 'Ver', grupo: 'triagem' },
+  { chave: 'triagem.classificar', tela: 'Triagem', acao: 'Classificar', grupo: 'triagem' },
+  { chave: 'kpis.ver', tela: 'KPIs', acao: 'Ver', grupo: 'kpis' },
+  { chave: 'reclamacoes.ver', tela: 'Reclamações', acao: 'Ver', grupo: 'reclamacoes' },
+  { chave: 'reclamacoes.criar', tela: 'Reclamações', acao: 'Criar', grupo: 'reclamacoes' },
+  { chave: 'reclamacoes.editar', tela: 'Reclamações', acao: 'Editar', grupo: 'reclamacoes' },
+  { chave: 'reclamacoes.excluir', tela: 'Reclamações', acao: 'Excluir', grupo: 'reclamacoes' },
+  { chave: 'alertas.ver', tela: 'Alertas', acao: 'Ver', grupo: 'alertas' },
+  { chave: 'alertas.gerir', tela: 'Alertas', acao: 'Gerir / varrer', grupo: 'alertas' },
+  { chave: 'decisoes.ver', tela: 'Decidir hoje', acao: 'Ver', grupo: 'decisoes' },
+  { chave: 'qualidade.ver', tela: 'Qualidade', acao: 'Ver', grupo: 'qualidade' },
+  { chave: 'qualidade.importar', tela: 'Qualidade', acao: 'Importar vendas', grupo: 'qualidade' },
+  { chave: 'qualidade.planos', tela: 'Qualidade', acao: 'Planos de ação', grupo: 'qualidade' },
+  { chave: 'gestao.ver', tela: 'Gestão', acao: 'Ver', grupo: 'gestao' },
+  { chave: 'gestao.usuarios', tela: 'Gestão', acao: 'Usuários', grupo: 'gestao' },
+  { chave: 'gestao.produtos', tela: 'Gestão', acao: 'Produtos', grupo: 'gestao' },
+  { chave: 'gestao.regras', tela: 'Gestão', acao: 'Regras', grupo: 'gestao' },
+  { chave: 'gestao.config', tela: 'Gestão', acao: 'Configurações', grupo: 'gestao' },
+  { chave: 'dados.ver', tela: 'Dados', acao: 'Ver', grupo: 'dados' },
+  { chave: 'dados.importar', tela: 'Dados', acao: 'Importar backup', grupo: 'dados' },
+  { chave: 'dados.exportar', tela: 'Dados', acao: 'Exportar backup', grupo: 'dados' },
+  { chave: 'admin.ver', tela: 'Admin', acao: 'Ver', grupo: 'admin' },
+  { chave: 'admin.permissoes', tela: 'Admin', acao: 'Editar permissões', grupo: 'admin' },
+  { chave: 'admin.backup', tela: 'Admin', acao: 'Backup agora', grupo: 'admin' },
+  { chave: 'evolucao.ligar', tela: 'Evolução', acao: 'Ligar / voltar', grupo: 'evolucao' },
+] as const;
+
+export type PermissaoChave = (typeof PERMISSOES_CATALOGO)[number]['chave'];
+
+const ALL = PERMISSOES_CATALOGO.map((p) => p.chave);
+
+const OPERADOR: PermissaoChave[] = [
+  'triagem.ver',
+  'triagem.classificar',
+  'kpis.ver',
+  'reclamacoes.ver',
+  'reclamacoes.criar',
+  'reclamacoes.editar',
+  'alertas.ver',
+  'qualidade.ver',
+  'qualidade.planos',
+];
+
+const GESTOR: PermissaoChave[] = [
+  ...OPERADOR,
+  'reclamacoes.excluir',
+  'alertas.gerir',
+  'decisoes.ver',
+  'qualidade.importar',
+  'gestao.ver',
+  'gestao.usuarios',
+  'gestao.regras',
+  'gestao.config',
+  'dados.ver',
+  'dados.importar',
+  'dados.exportar',
+];
+
+/** Padrões que reproduzem o comportamento atual dos três perfis. */
+export const PERMISSOES_PADRAO: Record<'master' | 'gestor' | 'operador', PermissaoChave[]> = {
+  master: [...ALL],
+  gestor: GESTOR,
+  operador: OPERADOR,
+};
+
+export function mesclarPermissoes(
+  perfil: 'master' | 'gestor' | 'operador',
+  overrides: { chave: string; permitido: boolean }[],
+): string[] {
+  if (perfil === 'master') return [...ALL];
+  const base = new Set<string>(PERMISSOES_PADRAO[perfil] || OPERADOR);
+  for (const o of overrides) {
+    if (o.permitido) base.add(o.chave);
+    else base.delete(o.chave);
+  }
+  return [...base];
+}
+
+export function temPermissao(lista: string[] | undefined | null, chave: string): boolean {
+  return !!lista?.includes(chave);
+}

@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Query, Req } from '@nestjs/common';
-import { Roles } from '../auth/auth.guard';
+import { Roles, Require } from '../auth/auth.guard';
 import { AuthUser } from '../auth/auth.types';
 import { EvolucaoService } from './evolucao.service';
 

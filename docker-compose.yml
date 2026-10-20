@@ -21,6 +21,32 @@ services:
       timeout: 5s
       retries: 5
 
+  # Banco só para testar restore — nunca aponte a API de produção aqui
+  postgres_restore:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    profiles: ["restore"]
+    environment:
+      POSTGRES_USER: sac
+      POSTGRES_PASSWORD: sac_secret
+      POSTGRES_DB: sac_aisa_restore
+    ports:
+      - "5433:5432"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - sac_redis:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   api:
     build:
       context: .
@@ -29,8 +55,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql://sac:sac_secret@postgres:5432/sac_aisa?schema=public
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       API_PORT: 3001
       JWT_SECRET: ${JWT_SECRET:-troque-este-segredo}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
@@ -45,6 +74,7 @@ services:
       ALERT_AGUARDANDO_DIAS: ${ALERT_AGUARDANDO_DIAS:-7}
       ALERT_META_DIAS: ${ALERT_META_DIAS:-2}
       ALERT_CUSTO_ALTO: ${ALERT_CUSTO_ALTO:-500}
+      SENTRY_DSN: ${SENTRY_DSN:-}
     volumes:
       - sac_uploads:/app/uploads
       - ./data:/app/data:ro
@@ -88,3 +118,4 @@ volumes:
   sac_pg:
   sac_uploads:
   sac_evolution:
+  sac_redis:
