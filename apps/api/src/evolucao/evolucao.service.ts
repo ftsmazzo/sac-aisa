@@ -9,6 +9,7 @@ import {
   PONTO_DE_RETORNO,
   causaDe,
   sinalSeguranca,
+  situacao,
 } from '../domain-bridge';
 
 export interface CartaoDecisao {
@@ -22,7 +23,9 @@ export interface CartaoDecisao {
     | 'outros'
     | 'seguranca'
     | 'rascunho'
-    | 'revisao';
+    | 'revisao'
+    | 'ativa'
+    | 'aguardando';
   setorResp: string;
   titulo: string;
   fato: string;
@@ -98,9 +101,39 @@ export class EvolucaoService {
 
   async decisoes(setor?: string): Promise<{ ativa: boolean; cartoes: CartaoDecisao[] }> {
     const pol = await this.politica.get();
-    if (!pol.ativa) return { ativa: false, cartoes: [] };
-
     const cartoes: CartaoDecisao[] = [];
+
+    // Um cartão por reclamação ainda aberta (sem data de ação), independente da evolução
+    const abertas = await this.prisma.reclamacao.findMany({
+      where: { OR: [{ dataAcao: null }, { dataAcao: '' }], rascunho: false },
+      orderBy: { reg: 'desc' },
+      take: 500,
+    });
+    for (const r of abertas) {
+      const causa = causaDe(r);
+      const setorResp = (r.setorRespManual || '').trim() || causa.setor;
+      if (setor && setorResp !== setor) continue;
+      const sit = situacao(r);
+      const chegou = r.devolucao === 'RECEBIDO';
+      const tipo: CartaoDecisao['tipo'] = chegou ? 'revisao' : sit === 'aguardando' ? 'aguardando' : 'ativa';
+      const sku = (r.sku || '').trim() || 'sem SKU';
+      cartoes.push({
+        id: `ativa:${r.id}`,
+        tipo,
+        setorResp,
+        titulo: `#${r.reg} · ${sku}${r.produto ? ` — ${r.produto}` : ''}`,
+        fato: `${sit === 'aguardando' ? 'Aguardando chegada' : chegou ? 'Produto recebido — revisar' : 'Em tratativa'} · ${r.cliente || 'cliente'}${r.setor ? ` · fab. ${r.setor}` : ''}. ${(r.reclamacao || '').slice(0, 180)}`,
+        acaoSugerida: causa.acao || 'Confirmar no SAC antes de agir.',
+        reclamacaoId: r.id,
+        sku: r.sku || undefined,
+      });
+    }
+
+    if (!pol.ativa) {
+      return { ativa: false, cartoes };
+    }
+
+    const jaTemCaso = new Set(cartoes.map((c) => c.reclamacaoId).filter(Boolean));
     const alertas = await this.prisma.alerta.findMany({
       where: { status: { in: ['aberto', 'enviado'] } },
       include: { reclamacao: true },
@@ -113,6 +146,8 @@ export class EvolucaoService {
       const causa = rec ? causaDe(rec) : null;
       const setorResp = a.setorResp || causa?.setor || '';
       if (setor && setorResp !== setor) continue;
+      // O caso aberto já tem cartão próprio — não duplica revisão/atraso da mesma ficha
+      if (a.reclamacaoId && jaTemCaso.has(a.reclamacaoId) && a.tipo !== 'RECORRENCIA') continue;
       cartoes.push({
         id: `alerta:${a.id}`,
         tipo: tipoDeAlerta(a.tipo),
@@ -125,10 +160,6 @@ export class EvolucaoService {
       });
     }
 
-    const abertas = await this.prisma.reclamacao.findMany({
-      where: { OR: [{ dataAcao: null }, { dataAcao: '' }], rascunho: false },
-      take: 500,
-    });
     for (const r of abertas) {
       const causa = causaDe(r);
       if (!sinalSeguranca(causa.id)) continue;
