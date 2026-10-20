@@ -140,6 +140,18 @@ export function resolverPeriodo(
   ) {
     return { de: addDaysIso(hoje, -29), ate: hoje, label: 'últimos 30 dias' };
   }
+  if (
+    p === 'ano' ||
+    p === 'este ano' ||
+    p === 'esse ano' ||
+    p === 'ytd' ||
+    p === 'ano atual' ||
+    p.includes('este ano') ||
+    p.includes('esse ano')
+  ) {
+    const year = hoje.slice(0, 4);
+    return { de: `${year}-01-01`, ate: hoje, label: `ano ${year} (até hoje)` };
+  }
   // preset desconhecido: NÃO cair em "hoje" (gera alucinação de “não há dados”)
   return { de: addDaysIso(hoje, -29), ate: hoje, label: 'últimos 30 dias (padrão)' };
 }
@@ -159,17 +171,17 @@ export const GESTOR_TOOL_DEFS: GestorToolDef[] = [
     function: {
       name: 'periodo_resolver',
       description:
-        'Converte período em {de, ate} (America/Sao_Paulo). Use ANTES de listar/KPI. Aceita hoje, ontem, semana, 15d, 30d, 45d, “últimos N dias”, ou o número em dias. NÃO invente datas. Preferir dias=N quando o gestor disser “últimos 45 dias”.',
+        'Converte período em {de, ate} (America/Sao_Paulo). Use ANTES de listar/KPI. Aceita hoje, ontem, semana, 15d, 30d, 45d, ano/este ano, “últimos N dias”, ou dias=N. NÃO invente datas.',
       parameters: {
         type: 'object',
         properties: {
           preset: {
             type: 'string',
-            description: 'hoje | ontem | semana | 15d | 30d | 45d | ultimos 45 dias | etc.',
+            description: 'hoje | ontem | semana | 15d | 30d | 45d | ano | este ano | ultimos 45 dias',
           },
           dias: {
             type: 'number',
-            description: 'N últimos dias (1–365). Ex.: 45 para “últimos 45 dias”. Preferir este campo.',
+            description: 'N últimos dias (1–365). Ex.: 45.',
           },
           de: { type: 'string', description: 'YYYY-MM-DD início (opcional)' },
           ate: { type: 'string', description: 'YYYY-MM-DD fim (opcional)' },
@@ -183,7 +195,7 @@ export const GESTOR_TOOL_DEFS: GestorToolDef[] = [
     function: {
       name: 'reclamacoes_listar',
       description:
-        'Lista resumida de reclamações no período (máx. 15). Use para “reclamações de hoje/semana/15 dias”, filtros por status/setor/sku. Não use para KPI agregado (use kpi_resumo) nem para um único protocolo (use reclamacao_status). Sempre passe de/ate (chame periodo_resolver antes se preciso).',
+        'Lista resumida de reclamações no período (máx. 15) + total no filtro. Use para listar por período/setor/causa. Kit faltando: causa=kit. Sempre passe de/ate (periodo_resolver antes).',
       parameters: {
         type: 'object',
         properties: {
@@ -193,8 +205,12 @@ export const GESTOR_TOOL_DEFS: GestorToolDef[] = [
             type: 'string',
             description: 'aguardando | tratativa | resolvida (opcional)',
           },
-          setor: { type: 'string', description: 'Setor responsável (opcional, match exato/fuzzy via resp)' },
+          setor: { type: 'string', description: 'Setor responsável (fuzzy ok)' },
           sku: { type: 'string', description: 'SKU (opcional)' },
+          causa: {
+            type: 'string',
+            description: 'Id da causa: kit | item | voltagem | erro_envio | avaria | ... (kit = kit de montagem faltando)',
+          },
           q: { type: 'string', description: 'Busca livre cliente/produto/texto (opcional)' },
         },
         required: ['de', 'ate'],
@@ -428,27 +444,60 @@ export class GestorToolsService {
   private async reclamacoesListar(args: Record<string, unknown>) {
     const de = String(args.de);
     const ate = String(args.ate);
+    const causaId =
+      typeof args.causa === 'string' && args.causa.trim() ? args.causa.trim().toLowerCase() : '';
+    // Alias comuns do gestor
+    const causaNorm =
+      causaId === 'kits' || causaId === 'kit_montagem' || causaId === 'faltando_kit' ? 'kit' : causaId;
+
     const query: Record<string, string | undefined> = {
       de,
       ate,
-      limit: '15',
+      limit: '200',
       ordem: 'data_desc',
     };
     if (args.status) query.status = String(args.status);
     if (args.sku) query.sku = String(args.sku);
     if (args.q) query.q = String(args.q);
+    if (causaNorm) query.causa = causaNorm;
     if (args.setor) query.resp = String(args.setor);
 
     let rows = await this.reclamacoes.list(query);
     // Match de setor é exato no list(); se veio setor, sempre reforça com fuzzy
     if (args.setor) {
-      const all = await this.reclamacoes.list({ de, ate, limit: '200', ordem: 'data_desc' });
+      const all = await this.reclamacoes.list({
+        de,
+        ate,
+        limit: '200',
+        ordem: 'data_desc',
+        ...(causaNorm ? { causa: causaNorm } : {}),
+        ...(args.q ? { q: String(args.q) } : {}),
+        ...(args.status ? { status: String(args.status) } : {}),
+      });
       const needle = String(args.setor);
-      rows = all
-        .filter((r) => setorFuzzyMatch(String((r as { setorResp?: string }).setorResp || ''), needle))
-        .slice(0, 15);
+      rows = all.filter((r) =>
+        setorFuzzyMatch(String((r as { setorResp?: string }).setorResp || ''), needle),
+      );
     }
 
+    // Se pediu kit e veio vazio por causaId, reforça busca textual
+    if (causaNorm === 'kit' && rows.length === 0) {
+      rows = await this.reclamacoes.list({
+        de,
+        ate,
+        limit: '200',
+        ordem: 'data_desc',
+        q: 'kit',
+      });
+      rows = rows.filter((r) => {
+        const c = String((r as { causa?: { id?: string; nome?: string } }).causa?.id || causaDe(r).id);
+        const nome = String((r as { causa?: { nome?: string } }).causa?.nome || '');
+        const txt = `${r.reclamacao || ''} ${r.laudo || ''} ${nome}`.toLowerCase();
+        return c === 'kit' || /kit/.test(txt);
+      });
+    }
+
+    const total = rows.length;
     const itens = rows.slice(0, 15).map((r) => {
       const en = r as {
         reg: number;
@@ -464,14 +513,22 @@ export class GestorToolsService {
         reg: en.reg,
         data: en.data,
         sku: en.sku,
-        produto: (en.produto || '').slice(0, 40),
+        produto: (en.produto || '').slice(0, 50),
         situacao: en.situacao || situacao(r),
         causa: en.causa?.nome || causaDe(r).nome,
         setor: en.setorResp || '',
         cliente: (en.cliente || '').slice(0, 30),
       };
     });
-    return { de, ate, total_retornado: itens.length, itens };
+    return {
+      de,
+      ate,
+      filtro_causa: causaNorm || null,
+      total,
+      total_retornado: itens.length,
+      truncado: total > itens.length,
+      itens,
+    };
   }
 
   private async reclamacaoStatus(token: string) {

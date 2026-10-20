@@ -110,6 +110,8 @@ export class IaService {
     user: string;
     tools: ChatToolDef[];
     executeTool: (name: string, args: Record<string, unknown>) => Promise<unknown>;
+    /** Turnos user/assistant anteriores (sem system). */
+    history?: { role: 'user' | 'assistant'; content: string }[];
     maxRounds?: number;
     temperature?: number;
     modelOverride?: string;
@@ -118,13 +120,17 @@ export class IaService {
     const provider = this.resolveProvider(opts.modelOverride);
     if (!provider) throw new Error('LLM não configurado');
 
-    const maxRounds = opts.maxRounds ?? 4;
+    const maxRounds = opts.maxRounds ?? 5;
+    const history = (opts.history || []).slice(-12);
     const messages: ChatMessage[] = [
       { role: 'system', content: opts.system },
+      ...history.map((h) => ({ role: h.role, content: h.content }) as ChatMessage),
       { role: 'user', content: opts.user },
     ];
 
-    const deadline = Date.now() + (opts.timeoutMs ?? 25_000);
+    const deadline = Date.now() + (opts.timeoutMs ?? 35_000);
+    let usedTools = false;
+    let stallNudges = 0;
 
     for (let round = 0; round < maxRounds; round++) {
       if (Date.now() > deadline) throw new Error('Timeout do orquestrador');
@@ -162,9 +168,23 @@ export class IaService {
 
       const toolCalls = msg.tool_calls || [];
       if (!toolCalls.length) {
-        return (msg.content || '').trim() || 'Não consegui montar uma resposta agora.';
+        const content = (msg.content || '').trim();
+        // Modelo enrolou (“aguarde”, pediu período de novo) sem chamar tool → força execução
+        if (!usedTools && stallNudges < 2 && this.looksLikeStall(content, opts.user)) {
+          stallNudges++;
+          messages.push({ role: 'assistant', content: content || null });
+          messages.push({
+            role: 'user',
+            content:
+              'Não peça confirmação, não diga “aguarde” e não reinicie a conversa. ' +
+              'Use o histórico. Chame periodo_resolver + a tool de dados agora e responda com os números/lista.',
+          });
+          continue;
+        }
+        return content || 'Não consegui montar uma resposta agora.';
       }
 
+      usedTools = true;
       messages.push({
         role: 'assistant',
         content: msg.content ?? null,
@@ -211,7 +231,37 @@ export class IaService {
     const jsonFinal = (await resFinal.json()) as {
       choices?: { message?: { content?: string } }[];
     };
-    return (jsonFinal.choices?.[0]?.message?.content || '').trim() || 'Consultei os dados, mas não consegui resumir. Tente *KPI* ou *MENU*.';
+    return (
+      (jsonFinal.choices?.[0]?.message?.content || '').trim() ||
+      'Consultei os dados, mas não consegui resumir. Pode repetir o pedido?'
+    );
+  }
+
+  /** Texto que enrola em vez de consultar dados. */
+  private looksLikeStall(content: string, userMsg: string): boolean {
+    const c = content.toLowerCase();
+    const u = userMsg.toLowerCase().trim();
+    // Cumprimento puro pode responder sem tool
+    if (/^(oi|olá|ola|bom dia|boa tarde|boa noite|hey|eai|e aí)[\s!.?]*$/i.test(u) && c.length < 220) {
+      return false;
+    }
+    if (!c) return true;
+    if (
+      /aguarde|um momento|um instante|já verifico|vou verificar|vamos verificar|pode confirmar|qual período|intervalo em mente|como posso ajudar|em que posso ajudar|olá!|ola!/.test(
+        c,
+      )
+    ) {
+      return true;
+    }
+    // Pediu dado e a resposta só faz pergunta sem cifra
+    if (
+      /(reclam|kit|setor|kpi|alerta|causa|ppm|status|hoje|semana|ano|dias)/i.test(u) &&
+      c.includes('?') &&
+      !/\d/.test(c)
+    ) {
+      return true;
+    }
+    return false;
   }
 
   classificarLegado(r: ReclamacaoLike): ClassificacaoResult {
