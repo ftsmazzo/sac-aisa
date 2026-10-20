@@ -608,7 +608,7 @@ export const PERMISSOES_CATALOGO = [
   { chave: 'dados.exportar', tela: 'Dados', acao: 'Exportar backup', grupo: 'dados' },
   { chave: 'admin.ver', tela: 'Admin', acao: 'Ver', grupo: 'admin' },
   { chave: 'admin.permissoes', tela: 'Admin', acao: 'Editar permissões', grupo: 'admin' },
-  { chave: 'admin.backup', tela: 'Admin', acao: 'Backup agora', grupo: 'admin' },
+  { chave: 'admin.backup', tela: 'Admin', acao: 'Gerar e baixar dumps', grupo: 'admin' },
   { chave: 'evolucao.ligar', tela: 'Evolução', acao: 'Ligar / voltar', grupo: 'evolucao' },
 ] as const;
 

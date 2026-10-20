@@ -21,8 +21,11 @@ RUN npm run build -w @sac-aisa/domain \
 
 FROM node:22-alpine
 WORKDIR /app
-RUN apk add --no-cache openssl libc6-compat
+# postgresql-client: pg_dump para backups controlados pelo Admin do SAC
+RUN apk add --no-cache openssl libc6-compat postgresql-client
 ENV NODE_ENV=production
+ENV BACKUP_DIR=/data/backups
+RUN mkdir -p /data/backups
 COPY --from=build /app /app
 WORKDIR /app/apps/api
 EXPOSE 3001

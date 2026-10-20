@@ -75,8 +75,10 @@ services:
       ALERT_META_DIAS: ${ALERT_META_DIAS:-2}
       ALERT_CUSTO_ALTO: ${ALERT_CUSTO_ALTO:-500}
       SENTRY_DSN: ${SENTRY_DSN:-}
+      BACKUP_DIR: /data/backups
     volumes:
       - sac_uploads:/app/uploads
+      - sac_backups:/data/backups
       - ./data:/app/data:ro
     ports:
       - "3001:3001"
@@ -117,5 +119,6 @@ services:
 volumes:
   sac_pg:
   sac_uploads:
+  sac_backups:
   sac_evolution:
   sac_redis:
