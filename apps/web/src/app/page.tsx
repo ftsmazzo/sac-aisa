@@ -1363,9 +1363,9 @@ export default function HomePage() {
         ) : null}
         {msg ? (
           <div className="card" style={{ background: 'var(--ok-bg)' }}>
-            {msg}{' '}
-            <button className="small" onClick={() => setMsg('')}>
-              ok
+            <span>{msg}</span>{' '}
+            <button type="button" className="small" onClick={() => setMsg('')}>
+              Fechar
             </button>
           </div>
         ) : null}

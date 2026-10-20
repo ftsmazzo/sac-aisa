@@ -29,5 +29,5 @@ RUN mkdir -p /data/backups
 COPY --from=build /app /app
 WORKDIR /app/apps/api
 EXPOSE 3001
-# Limpa migration de seed falha (se existir), aplica schema e carrega dados via seed.ts
-CMD ["sh", "-c", "npx prisma migrate resolve --rolled-back 20261017000000_seed_dados_iniciais || true; npx prisma migrate deploy && npx tsx prisma/seed.ts && node dist/main.js"]
+# Aplica migrations + seed e sobe a API (sem resolve --rolled-back: gera P3012 se a migration não está failed)
+CMD ["sh", "-c", "npx prisma migrate deploy && npx tsx prisma/seed.ts && node dist/main.js"]

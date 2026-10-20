@@ -74,9 +74,21 @@ export class BackupService {
     return { ultimo: backups[0] || null, backups, pasta };
   }
 
+  /** Prisma usa ?schema=public; pg_dump não aceita esse query param. */
+  private connectionUrl() {
+    const raw = process.env.DATABASE_URL?.trim();
+    if (!raw) throw new ServiceUnavailableException('DATABASE_URL não configurada');
+    try {
+      const u = new URL(raw);
+      u.search = '';
+      return u.toString();
+    } catch {
+      return raw.split('?')[0];
+    }
+  }
+
   async criar(origem = 'admin'): Promise<BackupItem> {
-    const url = process.env.DATABASE_URL?.trim();
-    if (!url) throw new ServiceUnavailableException('DATABASE_URL não configurada');
+    const url = this.connectionUrl();
 
     const pasta = this.dir();
     const now = new Date();
@@ -87,13 +99,21 @@ export class BackupService {
     await this.fila.enfileirar('backup_dump', { origem, nome });
 
     try {
-      await execFileAsync(
+      const { stderr } = await execFileAsync(
         'pg_dump',
-        [url, '--no-owner', '--no-acl', '--format=custom', `--file=${destino}`],
+        [
+          `--dbname=${url}`,
+          '--no-owner',
+          '--no-acl',
+          '--format=custom',
+          `--file=${destino}`,
+        ],
         { maxBuffer: 64 * 1024 * 1024, timeout: 10 * 60 * 1000 },
       );
+      if (stderr?.trim()) this.log.warn(`pg_dump stderr: ${stderr.slice(0, 500)}`);
     } catch (e) {
-      this.log.error(`pg_dump falhou: ${e}`);
+      const detail = e instanceof Error ? e.message : String(e);
+      this.log.error(`pg_dump falhou: ${detail}`);
       if (existsSync(destino)) {
         try {
           unlinkSync(destino);
@@ -102,7 +122,7 @@ export class BackupService {
         }
       }
       throw new ServiceUnavailableException(
-        'Não foi possível gerar o dump. Confira se o postgresql-client está na imagem e se o banco responde.',
+        `Não foi possível gerar o dump (${detail.slice(0, 180)}). Verifique postgresql-client na imagem e o banco.`,
       );
     }
 
