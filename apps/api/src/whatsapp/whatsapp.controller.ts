@@ -20,10 +20,16 @@ export class WhatsappController {
     @Headers('x-evolution-secret') secret?: string,
     @Headers('apikey') apikey?: string,
   ) {
-    const expected = process.env.EVOLUTION_WEBHOOK_SECRET;
-    const autorizado = !!expected && (secret === expected || apikey === process.env.EVOLUTION_API_KEY);
-    if (expected && !autorizado) {
-      throw new UnauthorizedException('Webhook não autorizado');
+    const expected = (process.env.EVOLUTION_WEBHOOK_SECRET || '').trim();
+    // Sem secret na API = aceita (Evolution Manager muitas vezes não manda header).
+    // Com secret: aceita header x-evolution-secret OU apikey da Evolution.
+    if (expected) {
+      const autorizado = secret === expected || apikey === process.env.EVOLUTION_API_KEY;
+      if (!autorizado) {
+        throw new UnauthorizedException(
+          'Webhook não autorizado — confira EVOLUTION_WEBHOOK_SECRET ou deixe a variável vazia',
+        );
+      }
     }
     return this.whatsapp.handleWebhook(body);
   }

@@ -37,13 +37,17 @@ export class WhatsappService {
   async handleWebhook(payload: unknown) {
     const msg = this.extractMessage(payload);
     if (!msg) return { ignored: true };
-    const { telefone, texto, nome } = msg;
+    const { telefone, destinoEnvio, texto, nome, lid } = msg;
     if (!texto) return { ignored: true };
 
+    this.log.log(
+      `WA inbound telefone=${telefone}${lid ? ` lid=${lid}` : ''} destino=${destinoEnvio} texto=${texto.slice(0, 40)}`,
+    );
+
     // Ramo gestor (allowlist) — não mistura com fluxo de cliente
-    const gestor = await this.gestorAgent.isGestor(telefone);
+    const gestor = await this.gestorAgent.isGestor(telefone, lid);
     if (gestor.ok) {
-      return this.handleGestor(telefone, texto, nome, gestor.nome);
+      return this.handleGestor(telefone, destinoEnvio, texto, nome, gestor.nome);
     }
 
     let conversa = await this.prisma.whatsappConversa.findFirst({
@@ -66,14 +70,14 @@ export class WhatsappService {
         where: { id: conversa.id },
         data: { estado: 'inicio', contexto: {} },
       });
-      await this.reply(conversa.id, telefone, `Voltamos ao início.\n\n${MENU}`);
+      await this.reply(conversa.id, destinoEnvio, `Voltamos ao início.\n\n${MENU}`);
       return { retorno: true };
     }
 
     if (['atendente', 'humano', 'operador'].some((k) => lower.includes(k))) {
       const reply =
         'Certo! Encaminhei para um atendente do SAC. Em horário comercial alguém retoma por aqui.';
-      await this.reply(conversa.id, telefone, reply);
+      await this.reply(conversa.id, destinoEnvio, reply);
       await this.prisma.whatsappConversa.update({
         where: { id: conversa.id },
         data: { estado: 'handoff' },
@@ -82,7 +86,7 @@ export class WhatsappService {
     }
 
     if (lower.startsWith('status') || lower.startsWith('protocolo') || /^\d{1,6}$/.test(lower)) {
-      return this.consultarStatus(conversa.id, telefone, texto);
+      return this.consultarStatus(conversa.id, destinoEnvio, texto);
     }
 
     if (['oi', 'olá', 'ola', 'bom dia', 'boa tarde', 'menu', 'inicio', 'início'].includes(lower)) {
@@ -90,7 +94,7 @@ export class WhatsappService {
         where: { id: conversa.id },
         data: { estado: 'coletar_nome', contexto: {} },
       });
-      await this.reply(conversa.id, telefone, MENU);
+      await this.reply(conversa.id, destinoEnvio, MENU);
       return { ok: true };
     }
 
@@ -100,12 +104,12 @@ export class WhatsappService {
       conversa.estado === 'confirmar_sku' ||
       conversa.estado === 'inicio'
     ) {
-      return this.fluxoNova(conversa.id, telefone, texto, conversa.estado, (conversa.contexto || {}) as Ctx);
+      return this.fluxoNova(conversa.id, destinoEnvio, texto, conversa.estado, (conversa.contexto || {}) as Ctx);
     }
 
     await this.reply(
       conversa.id,
-      telefone,
+      destinoEnvio,
       'Não entendi. Digite *MENU*, *NOVA*, *STATUS 123* ou *ATENDENTE*.',
     );
     return { ok: true };
@@ -113,6 +117,7 @@ export class WhatsappService {
 
   private async handleGestor(
     telefone: string,
+    destinoEnvio: string,
     texto: string,
     nomePush?: string,
     nomeGestor?: string,
@@ -136,36 +141,94 @@ export class WhatsappService {
       data: { conversaId: conversa.id, direcao: 'inbound', texto },
     });
     const resposta = await this.gestorAgent.responder(texto);
-    await this.reply(conversa.id, telefone, resposta);
+    await this.reply(conversa.id, destinoEnvio, resposta);
     return { ok: true, gestor: true };
   }
 
-  private extractMessage(payload: unknown): { telefone: string; texto: string; nome?: string } | null {
+  /**
+   * Evolution v2+ manda remoteJid como `@lid` e o telefone real em `remoteJidAlt`
+   * (ex.: 5511…@s.whatsapp.net). Sem isso o SAC “ouve” e não consegue responder.
+   */
+  private extractMessage(payload: unknown): {
+    telefone: string;
+    destinoEnvio: string;
+    texto: string;
+    nome?: string;
+    lid?: string;
+  } | null {
     const p = payload as Record<string, unknown>;
-    const data = (p.data || p) as Record<string, unknown>;
-    const key = data.key as Record<string, unknown> | undefined;
-    const message = data.message as Record<string, unknown> | undefined;
-    const remote = String(key?.remoteJid || data.remoteJid || '').replace(/@.*/, '');
-    if (!remote || key?.fromMe) return null;
-    const texto =
-      String(
-        message?.conversation ||
-          (message?.extendedTextMessage as { text?: string } | undefined)?.text ||
-          data.body ||
-          '',
-      ).trim();
+    let data = (p.data || p) as Record<string, unknown>;
+    if (Array.isArray(data)) data = (data[0] || {}) as Record<string, unknown>;
+    // alguns payloads: data.message / data.messages
+    if (!data.key && Array.isArray(data.messages)) {
+      data = (data.messages[0] || {}) as Record<string, unknown>;
+    }
+
+    const key = (data.key || {}) as Record<string, unknown>;
+    if (key.fromMe) return null;
+
+    const remoteJid = String(key.remoteJid || data.remoteJid || '');
+    if (!remoteJid) {
+      this.log.warn('Webhook sem remoteJid — ignorado');
+      return null;
+    }
+    if (remoteJid.endsWith('@g.us') || remoteJid.endsWith('@broadcast')) return null;
+
+    const remoteJidAlt = String(
+      key.remoteJidAlt || key.senderPn || data.senderPn || key.participantAlt || '',
+    );
+    const isLid = remoteJid.includes('@lid');
+    const lid = isLid ? remoteJid.replace(/@.*/, '').replace(/\D/g, '') || undefined : undefined;
+
+    // Telefone real: preferir Alt (5511…@s.whatsapp.net). Nunca tratar @lid como telefone.
+    let telefone = '';
+    if (remoteJidAlt && !remoteJidAlt.includes('@lid')) {
+      telefone = remoteJidAlt.replace(/@.*/, '').replace(/\D/g, '');
+    }
+    if (!telefone && !isLid) {
+      telefone = remoteJid.replace(/@.*/, '').replace(/\D/g, '');
+    }
+    // Fallback: só LID — chave interna = LID (allowlist pode listar o LID também)
+    if (!telefone && lid) telefone = lid;
+
+    if (!telefone) {
+      this.log.warn(`Webhook sem telefone resolvível jid=${remoteJid} alt=${remoteJidAlt}`);
+      return null;
+    }
+
+    // Destino de envio: telefone resolvido; se só LID, manda JID completo (Evolution aceita @lid)
+    const telefoneResolvido = Boolean(remoteJidAlt && !remoteJidAlt.includes('@lid'));
+    const destinoEnvio = telefoneResolvido
+      ? telefone
+      : remoteJid.includes('@')
+        ? remoteJid
+        : lid
+          ? `${lid}@lid`
+          : telefone;
+
+    const message = (data.message || {}) as Record<string, unknown>;
+    const texto = String(
+      message.conversation ||
+        (message.extendedTextMessage as { text?: string } | undefined)?.text ||
+        (message.imageMessage as { caption?: string } | undefined)?.caption ||
+        (message.buttonsResponseMessage as { selectedDisplayText?: string } | undefined)
+          ?.selectedDisplayText ||
+        (message.listResponseMessage as { title?: string } | undefined)?.title ||
+        data.body ||
+        '',
+    ).trim();
     const nome = String(data.pushName || '');
-    return { telefone: remote, texto, nome };
+    return { telefone, destinoEnvio, texto, nome, lid };
   }
 
-  private async reply(conversaId: string, telefone: string, texto: string) {
+  private async reply(conversaId: string, destinoEnvio: string, texto: string) {
     await this.prisma.whatsappMensagem.create({
       data: { conversaId, direcao: 'outbound', texto },
     });
     try {
-      await this.evolution.sendText(telefone, texto);
+      await this.evolution.sendText(destinoEnvio, texto);
     } catch (e) {
-      this.log.warn(`Falha envio Evolution: ${e}`);
+      this.log.warn(`Falha envio Evolution (destino=${destinoEnvio}): ${e}`);
     }
   }
 
