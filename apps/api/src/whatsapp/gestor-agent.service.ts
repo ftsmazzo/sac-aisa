@@ -26,16 +26,17 @@ export class GestorAgentService {
     private alertas: AlertasService,
   ) {}
 
-  /** Telefone está autorizado a usar o ramo gestor? */
-  async isGestor(telefone: string): Promise<{ ok: boolean; nome?: string }> {
+  /** Telefone (ou LID) está autorizado a usar o ramo gestor? */
+  async isGestor(telefone: string, lid?: string): Promise<{ ok: boolean; nome?: string }> {
     const digits = telefone.replace(/\D/g, '');
-    if (!digits) return { ok: false };
+    const lidDigits = (lid || '').replace(/\D/g, '');
+    if (!digits && !lidDigits) return { ok: false };
 
     const envList = (process.env.GESTOR_WHATSAPP_TELEFONES || '')
       .split(/[,;\s]+/)
       .map((t) => t.replace(/\D/g, ''))
       .filter(Boolean);
-    if (envList.some((t) => this.phoneMatch(digits, t))) {
+    if (envList.some((t) => this.phoneMatch(digits, t) || (lidDigits && this.phoneMatch(lidDigits, t)))) {
       return { ok: true, nome: 'Gestor (lista env)' };
     }
 

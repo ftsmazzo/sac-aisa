@@ -23,20 +23,25 @@ export class EvolutionService {
     };
   }
 
-  async sendText(number: string, text: string) {
+  /**
+   * Destino aceito pela Evolution:
+   * - telefone E.164 (5511…)
+   * - JID completo (5511…@s.whatsapp.net ou 123…@lid)
+   */
+  async sendText(numberOrJid: string, text: string) {
     if (!this.apiKey) {
-      this.log.warn(`Evolution sem API key — mensagem simulada para ${number}: ${text.slice(0, 80)}`);
+      this.log.warn(`Evolution sem API key — mensagem simulada para ${numberOrJid}: ${text.slice(0, 80)}`);
       return { simulated: true };
     }
-    const phone = number.replace(/\D/g, '');
+    const raw = String(numberOrJid || '').trim();
+    const number = raw.includes('@') ? raw : raw.replace(/\D/g, '');
+    if (!number) throw new Error('Destino vazio para sendText');
+
     const url = `${this.baseUrl}/message/sendText/${this.instance}`;
     const res = await fetch(url, {
       method: 'POST',
       headers: this.headers(),
-      body: JSON.stringify({
-        number: phone,
-        text,
-      }),
+      body: JSON.stringify({ number, text }),
     });
     if (!res.ok) {
       const body = await res.text();
