@@ -37,6 +37,7 @@ enum AlertTipo {
   CUSTO_ALTO
   CAUSA_OUTROS
   RASCUNHO_WHATSAPP
+  REVISAO_RECEBIDO
 }
 
 enum AlertStatus {

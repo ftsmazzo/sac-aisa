@@ -12,6 +12,7 @@ import { AuditoriaService } from '../auditoria.service';
 import { AuthUser } from '../auth/auth.types';
 import { PoliticaService } from '../evolucao/politica.service';
 import { ProdutoLookupService } from '../produtos/produto-lookup.service';
+import { AlertasService } from '../alertas/alertas.service';
 
 @Injectable()
 export class ReclamacoesService {
@@ -20,6 +21,7 @@ export class ReclamacoesService {
     private auditoria: AuditoriaService,
     private politica: PoliticaService,
     private produtos: ProdutoLookupService,
+    private alertas: AlertasService,
   ) {}
 
   async overrides(): Promise<Record<string, Partial<CausaDef>>> {
@@ -421,6 +423,20 @@ export class ReclamacoesService {
         ? { causaSugerida: atual.causaId, causaFinal: String(mapped.causaId), fonte: 'correcao_humana' }
         : undefined,
     });
+
+    // Produto chegou → cartão de revisão para o setor (Decidir hoje / Alertas)
+    const virouRecebido =
+      String(atual.devolucao) !== 'RECEBIDO' && String(updated.devolucao) === 'RECEBIDO';
+    if (virouRecebido) {
+      await this.alertas.criarRevisaoRecebido(updated);
+    }
+    // Caso resolvido → fecha o cartão de revisão
+    const resolveu =
+      !String(atual.dataAcao || '').trim() && !!String(updated.dataAcao || '').trim();
+    if (resolveu) {
+      await this.alertas.resolverRevisaoDaReclamacao(updated.id);
+    }
+
     return this.get(updated.id);
   }
 

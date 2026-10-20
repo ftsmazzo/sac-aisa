@@ -1131,8 +1131,15 @@ export default function HomePage() {
   }
 
   async function receber(id: string) {
-    await api(`/reclamacoes/${id}/receber`, { method: 'POST' });
-    await refresh();
+    try {
+      const r = await api<Rec>(`/reclamacoes/${id}/receber`, { method: 'POST' });
+      setMsg(
+        `Produto recebido #${r.reg}. Cartão de revisão criado para ${r.setorResp || 'o setor responsável'} — veja em Decidir hoje.`,
+      );
+      await refresh();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Falha ao marcar recebimento');
+    }
   }
 
   function toggleSel(id: string) {
@@ -1908,14 +1915,15 @@ export default function HomePage() {
         {tab === 'decisoes' && evolucao?.ativa ? (
           <>
             <p className="kpi-insight">
-              Fila do setor responsável. Os números vêm do banco. A ação sugerida é a do catálogo de causas.
+              Fila do setor responsável. Ao marcar produto recebido, nasce um cartão de revisão na chegada.
+              A ação sugerida vem do catálogo de causas.
               {filtros.resp ? ` Filtro: ${filtros.resp}.` : ' Use o filtro Resolve para ver um setor.'}
             </p>
             {decisoes.map((d) => (
               <div className="card" key={d.id}>
                 <h3>
                   {d.titulo}{' '}
-                  <span className="tag aguard">
+                  <span className={`tag ${d.tipo === 'revisao' ? 'trat' : 'aguard'}`}>
                     {{
                       atraso: 'atraso',
                       recorrencia: 'recorrência',
@@ -1925,6 +1933,7 @@ export default function HomePage() {
                       outros: 'causa em aberto',
                       seguranca: 'segurança',
                       rascunho: 'rascunho',
+                      revisao: 'revisão na chegada',
                     }[d.tipo] || d.tipo}
                   </span>
                 </h3>
@@ -1935,6 +1944,23 @@ export default function HomePage() {
                   {d.sku ? (
                     <button type="button" className="small" onClick={() => toggleFiltro({ sku: d.sku }, true)}>
                       Ver SKU {d.sku}
+                    </button>
+                  ) : null}
+                  {d.reclamacaoId ? (
+                    <button
+                      type="button"
+                      className="small"
+                      onClick={() => {
+                        const rec = lista.find((x) => x.id === d.reclamacaoId);
+                        if (rec) openEdit(rec);
+                        else {
+                          void api<Rec>(`/reclamacoes/${d.reclamacaoId}`)
+                            .then(openEdit)
+                            .catch((e) => setMsg(e instanceof Error ? e.message : 'Falha ao abrir'));
+                        }
+                      }}
+                    >
+                      Abrir ficha
                     </button>
                   ) : null}
                 </div>

@@ -469,7 +469,8 @@ export type AlertTipo =
   | 'RECORRENCIA'
   | 'CUSTO_ALTO'
   | 'CAUSA_OUTROS'
-  | 'RASCUNHO_WHATSAPP';
+  | 'RASCUNHO_WHATSAPP'
+  | 'REVISAO_RECEBIDO';
 
 export interface AlertConfig {
   aguardandoDias: number;

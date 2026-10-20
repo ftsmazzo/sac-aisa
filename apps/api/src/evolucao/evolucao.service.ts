@@ -13,7 +13,16 @@ import {
 
 export interface CartaoDecisao {
   id: string;
-  tipo: 'atraso' | 'recorrencia' | 'ppm' | 'plano_sem_efeito' | 'custo' | 'outros' | 'seguranca' | 'rascunho';
+  tipo:
+    | 'atraso'
+    | 'recorrencia'
+    | 'ppm'
+    | 'plano_sem_efeito'
+    | 'custo'
+    | 'outros'
+    | 'seguranca'
+    | 'rascunho'
+    | 'revisao';
   setorResp: string;
   titulo: string;
   fato: string;
@@ -174,6 +183,13 @@ export class EvolucaoService {
       });
     }
 
+    // Revisões na chegada no topo da fila do setor
+    cartoes.sort((a, b) => {
+      const pa = a.tipo === 'revisao' || a.tipo === 'seguranca' ? 0 : 1;
+      const pb = b.tipo === 'revisao' || b.tipo === 'seguranca' ? 0 : 1;
+      return pa - pb;
+    });
+
     return { ativa: true, cartoes };
   }
 }
@@ -183,5 +199,6 @@ function tipoDeAlerta(tipo: string): CartaoDecisao['tipo'] {
   if (tipo === 'CUSTO_ALTO') return 'custo';
   if (tipo === 'CAUSA_OUTROS') return 'outros';
   if (tipo === 'RASCUNHO_WHATSAPP') return 'rascunho';
+  if (tipo === 'REVISAO_RECEBIDO') return 'revisao';
   return 'atraso';
 }
