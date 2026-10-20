@@ -35,7 +35,8 @@ export class ReclamacoesService {
       if (query.ate) where.data.lte = query.ate;
     }
     if (query.empresa) where.empresa = query.empresa;
-    if (query.setor && query.setor !== '(vazio)') where.setor = query.setor;
+    if (query.setor === '(vazio)') where.setor = '';
+    else if (query.setor) where.setor = query.setor;
     if (query.laudo) where.laudo = query.laudo;
     if (query.canal) where.canal = query.canal;
     if (query.uf) where.uf = query.uf;
@@ -44,73 +45,96 @@ export class ReclamacoesService {
     if (query.origem) where.origem = query.origem;
     if (query.rascunho === '1') where.rascunho = true;
     if (query.rascunho === '0') where.rascunho = false;
-
-    const overrides = await this.overrides();
-    let rows = await this.prisma.reclamacao.findMany({
-      include: { fotos: true },
-      orderBy: [{ data: 'desc' }, { reg: 'desc' }],
-    });
-
-    // recompute situacao in memory for consistency with domain
-    rows = rows.map((r) => ({ ...r, situacao: situacao(r) }));
-
-    if (query.status) rows = rows.filter((r) => situacao(r) === query.status);
-    if (query.causa) rows = rows.filter((r) => causaDe(r, overrides).id === query.causa);
-    if (query.resp) rows = rows.filter((r) => {
-      const manual = (r.setorRespManual || '').trim();
-      return (manual || causaDe(r, overrides).setor) === query.resp;
-    });
     if (query.sku) {
-      const sku = query.sku.toUpperCase();
-      rows = rows.filter((r) => String(r.sku || '').toUpperCase() === sku);
+      where.sku = { equals: query.sku.trim(), mode: 'insensitive' };
     }
     if (query.q) {
-      const q = query.q.toLowerCase();
-      rows = rows.filter((r) =>
-        [
-          r.reg,
-          r.sku,
-          r.produto,
-          r.cliente,
-          r.cidade,
-          r.protocolo,
-          r.reclamacao,
-          r.solucao,
-          r.obs,
-          r.laudo,
-          r.familia,
-          r.obsCausa,
-          r.peca,
-        ]
-          .join(' ')
-          .toLowerCase()
-          .includes(q),
+      const q = query.q.trim();
+      const asNum = Number(q);
+      where.OR = [
+        { sku: { contains: q, mode: 'insensitive' } },
+        { produto: { contains: q, mode: 'insensitive' } },
+        { cliente: { contains: q, mode: 'insensitive' } },
+        { cidade: { contains: q, mode: 'insensitive' } },
+        { protocolo: { contains: q, mode: 'insensitive' } },
+        { reclamacao: { contains: q, mode: 'insensitive' } },
+        { solucao: { contains: q, mode: 'insensitive' } },
+        { laudo: { contains: q, mode: 'insensitive' } },
+        { obs: { contains: q, mode: 'insensitive' } },
+        { obsCausa: { contains: q, mode: 'insensitive' } },
+        { familia: { contains: q, mode: 'insensitive' } },
+        { peca: { contains: q, mode: 'insensitive' } },
+        ...(Number.isFinite(asNum) && String(asNum) === q ? [{ reg: asNum }] : []),
+      ];
+    }
+
+    // Situação é derivada: traduz filtros comuns para SQL
+    if (query.status === 'resolvida') {
+      where.AND = [...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []), { NOT: { OR: [{ dataAcao: null }, { dataAcao: '' }] } }];
+    } else if (query.status === 'aguardando') {
+      where.AND = [
+        ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+        { OR: [{ dataAcao: null }, { dataAcao: '' }] },
+        { devolucao: 'AGUARDANDO' },
+      ];
+    } else if (query.status === 'tratativa') {
+      where.AND = [
+        ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+        { OR: [{ dataAcao: null }, { dataAcao: '' }] },
+        { NOT: { devolucao: 'AGUARDANDO' } },
+      ];
+    }
+
+    const ordem = query.ordem || 'data_desc';
+    const orderBy: Prisma.ReclamacaoOrderByWithRelationInput[] =
+      ordem === 'reg_desc'
+        ? [{ reg: 'desc' }]
+        : ordem === 'data_asc'
+          ? [{ data: 'asc' }, { reg: 'asc' }]
+          : [{ data: 'desc' }, { reg: 'desc' }];
+
+    const unbounded = query.todos === '1';
+    const pageSize = unbounded
+      ? 50_000
+      : Math.min(Math.max(Number(query.limit) || 500, 1), 2000);
+    const page = Math.max(Number(query.page) || 1, 1);
+    const skip = unbounded ? 0 : (page - 1) * pageSize;
+    const precisaFiltroDerivado = !!(query.causa || query.resp || ordem === 'aguard_first');
+
+    const overrides = await this.overrides();
+    // Lista não carrega fotos (anexos vêm em GET /reclamacoes/:id/anexos)
+    // Filtros derivados (causa/resp) precisam carregar candidates; ainda assim respeitam o teto.
+    const takeSql = precisaFiltroDerivado ? Math.min(pageSize * 20, 50_000) : pageSize;
+    let rows = await this.prisma.reclamacao.findMany({
+      where,
+      orderBy,
+      take: takeSql,
+      skip: precisaFiltroDerivado ? 0 : skip,
+    });
+
+    rows = rows.map((r) => ({ ...r, situacao: situacao(r) }));
+
+    if (query.causa) rows = rows.filter((r) => causaDe(r, overrides).id === query.causa);
+    if (query.resp) {
+      rows = rows.filter((r) => {
+        const manual = (r.setorRespManual || '').trim();
+        return (manual || causaDe(r, overrides).setor) === query.resp;
+      });
+    }
+    if (ordem === 'aguard_first') {
+      rows.sort(
+        (a, b) =>
+          (situacao(b) === 'aguardando' ? 1 : 0) - (situacao(a) === 'aguardando' ? 1 : 0) ||
+          (b.data || '').localeCompare(a.data || '') ||
+          (b.reg || 0) - (a.reg || 0),
       );
     }
 
-    // apply date/filters already partially in SQL for common ones
-    if (query.de) rows = rows.filter((r) => !r.data || r.data >= query.de!);
-    if (query.ate) rows = rows.filter((r) => !r.data || r.data <= query.ate!);
-    if (query.empresa) rows = rows.filter((r) => r.empresa === query.empresa);
-    if (query.setor === '(vazio)') rows = rows.filter((r) => !r.setor);
-    else if (query.setor) rows = rows.filter((r) => r.setor === query.setor);
-    if (query.laudo) rows = rows.filter((r) => r.laudo === query.laudo);
-    if (query.canal) rows = rows.filter((r) => r.canal === query.canal);
-    if (query.uf) rows = rows.filter((r) => r.uf === query.uf);
-    if (query.proc) rows = rows.filter((r) => r.procedencia === query.proc);
-    if (query.dev) rows = rows.filter((r) => r.devolucao === query.dev);
-
-    const ordem = query.ordem || 'data_desc';
-    rows.sort((a, b) => {
-      if (ordem === 'reg_desc') return (b.reg || 0) - (a.reg || 0);
-      if (ordem === 'data_asc') return (a.data || '').localeCompare(b.data || '');
-      if (ordem === 'aguard_first') {
-        const da = situacao(a) === 'aguardando' ? 1 : 0;
-        const db = situacao(b) === 'aguardando' ? 1 : 0;
-        return db - da || (b.data || '').localeCompare(a.data || '');
-      }
-      return (b.data || '').localeCompare(a.data || '') || (b.reg || 0) - (a.reg || 0);
-    });
+    if (precisaFiltroDerivado) {
+      rows = rows.slice(skip, skip + pageSize);
+    } else if (rows.length > pageSize) {
+      rows = rows.slice(0, pageSize);
+    }
 
     return rows.map((r) => enrichReclamacao(r, overrides));
   }
@@ -256,7 +280,7 @@ export class ReclamacoesService {
   }
 
   async kpis(query: Record<string, string | undefined>) {
-    const lista = await this.list(query);
+    const lista = await this.list({ ...query, todos: '1' });
     const n = lista.length;
     const cnt = (s: string) => lista.filter((r) => r.situacao === s).length;
     const custo = lista.reduce((a, r) => a + Number(r.custoTotal || 0), 0);

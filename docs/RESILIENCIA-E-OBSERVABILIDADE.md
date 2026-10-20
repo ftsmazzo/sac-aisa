@@ -1,5 +1,14 @@
 # Resiliência, backup e observabilidade
 
+## Status das 4 ondas
+
+| Onda | Status | O que falta no EasyPanel (ops) |
+|---|---|---|
+| A · Permissões Admin | Pronto no código | Deploy API+Web |
+| B · Backup fácil | Botão **Backup agora** pronto | Ativar snapshot diário do Postgres no painel |
+| C · Lista não trava | Filtro no SQL + sem fotos na lista + limite 500 | — |
+| D · Endurecer | Rate limit login/webhook + `/health` + Glitchtip opcional | Colocar `SENTRY_DSN` e monitor no Uptime Kuma |
+
 ## Restore em banco secundário
 
 Não é besteira. É o jeito certo.
@@ -34,8 +43,18 @@ Se `checks.db` vier `erro`, o health ainda responde, mas `ok` fica `false` — o
 Vale a pena na API. É o Sentry open-source que você já usa em outros projetos.
 
 1. Crie um projeto no Glitchtip para o SAC.
-2. Copie o DSN para `SENTRY_DSN` na API (próxima onda pode ligar o SDK; a variável já está reservada).
-3. Use para erros 500, falhas de LLM e webhook — não para métricas de uptime (isso é Kuma).
+2. Copie o DSN para a variável de ambiente da API:
+
+```env
+SENTRY_DSN=https://...@seu-glitchtip.../...
+```
+
+3. Redeploy da API. Nos logs deve aparecer `Glitchtip/Sentry ativo`.
+4. Use para erros 500 — uptime continua no Uptime Kuma (`GET /health`).
+
+## Backup automático no EasyPanel (onda B restante)
+
+No serviço Postgres do SAC: ative backup/snapshot diário com retenção (ex.: 7 dias). Isso é configuração do painel, não do código.
 
 ## Backup fácil
 
