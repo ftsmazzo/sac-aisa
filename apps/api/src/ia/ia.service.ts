@@ -80,8 +80,7 @@ export class IaService {
       peca,
       confianca: causa.id === 'outros' ? 0.35 : 0.78,
       fonte: 'legado',
-      explicacao:
-        'Sugestão pelas regras do SAC (palavras-chave no laudo/reclamação/solução). Sem chave LLM configurada, só este modo roda.',
+      explicacao: 'Sugestão pelas regras do SAC (palavras-chave no laudo/reclamação/solução).',
     };
   }
 

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, clearSession, downloadAuthed, getUser, uploadFile, uploadUrl } from '@/lib/api';
 
-type Tab = 'triagem' | 'kpis' | 'lista' | 'alertas' | 'decisoes' | 'qualidade' | 'gestao' | 'dados';
+type Tab = 'triagem' | 'kpis' | 'lista' | 'alertas' | 'decisoes' | 'qualidade' | 'gestao' | 'dados' | 'admin';
 
 type Rec = {
   id: string;
@@ -314,7 +314,13 @@ function tagSit(s?: string) {
 
 export default function HomePage() {
   const router = useRouter();
-  const [user, setUser] = useState<{ login: string; nome: string; perfil: string } | null>(null);
+  const [user, setUser] = useState<{
+    login: string;
+    nome: string;
+    perfil: string;
+    sub?: string;
+    permissoes?: string[];
+  } | null>(null);
   const [tab, setTab] = useState<Tab>('triagem');
   const [filtros, setFiltros] = useState<Filtros>(emptyFiltros);
   const [lista, setLista] = useState<Rec[]>([]);
@@ -374,6 +380,21 @@ export default function HomePage() {
   } | null>(null);
   const [triagemExemplos, setTriagemExemplos] = useState<Rec[]>([]);
   const [triagemBusy, setTriagemBusy] = useState(false);
+  const [adminUserId, setAdminUserId] = useState('');
+  const [adminUsuarios, setAdminUsuarios] = useState<UsuarioRow[]>([]);
+  const [adminMatriz, setAdminMatriz] = useState<{
+    usuario: UsuarioRow;
+    catalogo: { chave: string; tela: string; acao: string; grupo: string }[];
+    padrao: string[];
+    overrides: Record<string, boolean>;
+    efetiva: string[];
+  } | null>(null);
+  const [adminStatus, setAdminStatus] = useState<{
+    db: string;
+    redis: string;
+    filaPendentes: number;
+  } | null>(null);
+  const [adminBusy, setAdminBusy] = useState(false);
   const [novoPlano, setNovoPlano] = useState({
     titulo: '',
     descricao: '',
@@ -511,12 +532,28 @@ export default function HomePage() {
   );
 
   useEffect(() => {
-    const u = getUser();
+    const u = getUser<{
+      login: string;
+      nome: string;
+      perfil: string;
+      sub?: string;
+      permissoes?: string[];
+    }>();
     if (!u) {
       router.replace('/login');
       return;
     }
     setUser(u);
+    api<{ user: typeof u }>('/auth/me')
+      .then((r) => {
+        setUser(r.user);
+        try {
+          localStorage.setItem('sac_user', JSON.stringify(r.user));
+        } catch {
+          /* ignore */
+        }
+      })
+      .catch(() => undefined);
     api<Causa[]>('/gestao/causas').then(setCausas).catch(() => undefined);
     api<EvolucaoEstado>('/evolucao').then(setEvolucao).catch(() => undefined);
   }, [router]);
@@ -576,6 +613,31 @@ export default function HomePage() {
     },
     [tab, filtros.de, filtros.ate, filtros.setor, filtros.resp, filtros.sku],
   );
+
+  useEffect(() => {
+    if (tab !== 'admin' || !canAdmin()) return;
+    const ac = new AbortController();
+    Promise.all([
+      api<UsuarioRow[]>('/gestao/usuarios', { signal: ac.signal }),
+      api<{ db: string; redis: string; filaPendentes: number }>('/admin/status', { signal: ac.signal }),
+    ])
+      .then(([users, status]) => {
+        if (ac.signal.aborted) return;
+        setAdminUsuarios(users);
+        setAdminStatus(status);
+      })
+      .catch((e) => {
+        if (e?.name !== 'AbortError') setMsg(e.message);
+      });
+    return () => ac.abort();
+  }, [tab, user?.perfil, user?.permissoes]);
+
+  function canAdmin() {
+    return (
+      !!user &&
+      (user.perfil === 'master' || !!(user.permissoes && user.permissoes.includes('admin.ver')))
+    );
+  }
 
   useEffect(() => {
     if (tab !== 'decisoes' || !evolucao?.ativa) return;
@@ -900,7 +962,22 @@ export default function HomePage() {
 
   if (!user) return null;
   const ehGestor = user.perfil === 'gestor' || user.perfil === 'master';
+  const can = (chave: string) =>
+    user.perfil === 'master' || !!(user.permissoes && user.permissoes.includes(chave));
   const setF = (k: string, v: string | number | boolean) => setForm((f) => ({ ...f, [k]: v }));
+
+  async function carregarAdminMatriz(id: string) {
+    setAdminBusy(true);
+    try {
+      const m = await api<NonNullable<typeof adminMatriz>>(`/admin/permissoes/${id}`);
+      setAdminMatriz(m);
+      setAdminUserId(id);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Falha ao carregar permissões');
+    } finally {
+      setAdminBusy(false);
+    }
+  }
 
   return (
     <div>
@@ -908,7 +985,7 @@ export default function HomePage() {
         <span className="titulo">SAC</span>
         <span className="muted">Agente de triagem · versão visível</span>
         <span className="spacer" />
-        {user.perfil === 'master' ? (
+        {can('evolucao.ligar') ? (
           evolucao?.ativa ? (
             <button
               className="small retorno"
@@ -974,15 +1051,16 @@ export default function HomePage() {
       <nav className="tabs">
         {(
           [
-            ['triagem', 'Triagem'],
-            ['kpis', 'KPIs'],
-            ['lista', 'Reclamações'],
-            ['alertas', 'Alertas'],
-            ...(evolucao?.ativa ? [['decisoes', 'Decidir hoje']] : []),
-            ['qualidade', 'Qualidade'],
-            ['gestao', 'Gestão'],
-            ['dados', 'Dados'],
-          ] as [Tab, string][]
+            can('triagem.ver') ? (['triagem', 'Triagem'] as const) : null,
+            can('kpis.ver') ? (['kpis', 'KPIs'] as const) : null,
+            can('reclamacoes.ver') ? (['lista', 'Reclamações'] as const) : null,
+            can('alertas.ver') ? (['alertas', 'Alertas'] as const) : null,
+            evolucao?.ativa && can('decisoes.ver') ? (['decisoes', 'Decidir hoje'] as const) : null,
+            can('qualidade.ver') ? (['qualidade', 'Qualidade'] as const) : null,
+            can('gestao.ver') ? (['gestao', 'Gestão'] as const) : null,
+            can('dados.ver') ? (['dados', 'Dados'] as const) : null,
+            can('admin.ver') ? (['admin', 'Admin'] as const) : null,
+          ].filter(Boolean) as [Tab, string][]
         ).map(([id, label]) => (
           <button key={id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}>
             {label}
@@ -2437,6 +2515,171 @@ export default function HomePage() {
               Evolution API webhook: <code>/whatsapp/webhook/evolution</code>
             </p>
           </div>
+        ) : null}
+
+        {tab === 'admin' && can('admin.ver') ? (
+          <>
+            <div className="card">
+              <h3>Admin · saúde e backup</h3>
+              <p className="muted">
+                Backup operacional em JSON (sem senhas). Restaure primeiro num Postgres secundário — veja
+                docs/RESILIENCIA-E-OBSERVABILIDADE.md.
+              </p>
+              <div className="tools">
+                <button
+                  type="button"
+                  className="small"
+                  onClick={async () => {
+                    try {
+                      const s = await api<NonNullable<typeof adminStatus>>('/admin/status');
+                      setAdminStatus(s);
+                    } catch (e) {
+                      setMsg(e instanceof Error ? e.message : 'Falha no status');
+                    }
+                  }}
+                >
+                  Checar banco e Redis
+                </button>
+                {can('admin.backup') ? (
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={async () => {
+                      try {
+                        const token = localStorage.getItem('sac_token') || '';
+                        const res = await fetch(
+                          `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/admin/backup`,
+                          {
+                            method: 'POST',
+                            headers: token ? { Authorization: `Bearer ${token}` } : {},
+                          },
+                        );
+                        if (!res.ok) throw new Error(`Erro ${res.status}`);
+                        const blob = await res.blob();
+                        const a = document.createElement('a');
+                        a.href = URL.createObjectURL(blob);
+                        a.download = `sac-backup-${new Date().toISOString().slice(0, 10)}.json`;
+                        a.click();
+                        URL.revokeObjectURL(a.href);
+                        setMsg('Backup baixado. Teste o restore num banco secundário.');
+                      } catch (e) {
+                        setMsg(e instanceof Error ? e.message : 'Falha no backup');
+                      }
+                    }}
+                  >
+                    Backup agora
+                  </button>
+                ) : null}
+              </div>
+              {adminStatus ? (
+                <p>
+                  Banco: <b>{adminStatus.db}</b> · Redis: <b>{adminStatus.redis}</b> · Fila pendente:{' '}
+                  <b>{adminStatus.filaPendentes}</b>
+                </p>
+              ) : null}
+            </div>
+
+            {can('admin.permissoes') ? (
+              <div className="card" style={{ marginTop: 12 }}>
+                <h3>Permissões por usuário</h3>
+                <p className="muted">
+                  O perfil define o padrão. Cada toggle grava um override. Master sempre tem tudo.
+                </p>
+                <div className="tools">
+                  <select
+                    value={adminUserId}
+                    onChange={(e) => {
+                      const id = e.target.value;
+                      if (id) void carregarAdminMatriz(id);
+                    }}
+                  >
+                    <option value="">Escolha o usuário…</option>
+                    {adminUsuarios.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.nome} ({u.login}) · {u.perfil}
+                      </option>
+                    ))}
+                  </select>
+                  {adminMatriz ? (
+                    <button
+                      type="button"
+                      className="small"
+                      disabled={adminBusy}
+                      onClick={async () => {
+                        setAdminBusy(true);
+                        try {
+                          const m = await api<NonNullable<typeof adminMatriz>>(
+                            `/admin/permissoes/${adminMatriz.usuario.id}/padrao`,
+                            { method: 'POST' },
+                          );
+                          setAdminMatriz(m);
+                          setMsg('Padrão do perfil aplicado.');
+                        } catch (e) {
+                          setMsg(e instanceof Error ? e.message : 'Falha');
+                        } finally {
+                          setAdminBusy(false);
+                        }
+                      }}
+                    >
+                      Aplicar padrão do perfil
+                    </button>
+                  ) : null}
+                </div>
+                {adminMatriz ? (
+                  <div className="tablewrap" style={{ marginTop: 12 }}>
+                    <table className="list">
+                      <thead>
+                        <tr>
+                          <th>Tela</th>
+                          <th>Ação</th>
+                          <th>Padrão</th>
+                          <th>Ligado</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {adminMatriz.catalogo.map((c) => {
+                          const noPadrao = adminMatriz.padrao.includes(c.chave);
+                          const ligado = adminMatriz.efetiva.includes(c.chave);
+                          return (
+                            <tr key={c.chave}>
+                              <td>{c.tela}</td>
+                              <td>{c.acao}</td>
+                              <td>{noPadrao ? 'sim' : 'não'}</td>
+                              <td>
+                                <input
+                                  type="checkbox"
+                                  checked={ligado}
+                                  disabled={adminMatriz.usuario.perfil === 'master' || adminBusy}
+                                  onChange={async (e) => {
+                                    const permitido = e.target.checked;
+                                    setAdminBusy(true);
+                                    try {
+                                      const m = await api<NonNullable<typeof adminMatriz>>(
+                                        `/admin/permissoes/${adminMatriz.usuario.id}`,
+                                        {
+                                          method: 'POST',
+                                          json: { itens: [{ chave: c.chave, permitido }] },
+                                        },
+                                      );
+                                      setAdminMatriz(m);
+                                    } catch (err) {
+                                      setMsg(err instanceof Error ? err.message : 'Falha ao salvar');
+                                    } finally {
+                                      setAdminBusy(false);
+                                    }
+                                  }}
+                                />
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </>
         ) : null}
       </main>
 

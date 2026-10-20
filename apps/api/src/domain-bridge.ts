@@ -19,10 +19,15 @@ import {
   sinalSeguranca,
   PONTO_DE_RETORNO,
   ESTADOS_WHATSAPP_CLASSICOS,
+  PERMISSOES_CATALOGO,
+  PERMISSOES_PADRAO,
+  mesclarPermissoes,
+  temPermissao,
   type AlertConfig,
   type CausaDef,
   type ReclamacaoLike,
   type PoliticaEvolucao,
+  type PermissaoChave,
 } from '@sac-aisa/domain';
 
 export {
@@ -46,9 +51,13 @@ export {
   sinalSeguranca,
   PONTO_DE_RETORNO,
   ESTADOS_WHATSAPP_CLASSICOS,
+  PERMISSOES_CATALOGO,
+  PERMISSOES_PADRAO,
+  mesclarPermissoes,
+  temPermissao,
 };
 
-export type { AlertConfig, CausaDef, ReclamacaoLike, PoliticaEvolucao };
+export type { AlertConfig, CausaDef, ReclamacaoLike, PoliticaEvolucao, PermissaoChave };
 
 export function enrichReclamacao<T extends ReclamacaoLike>(
   r: T,

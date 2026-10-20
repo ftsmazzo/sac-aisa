@@ -10,9 +10,12 @@ import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import { Perfil } from '@prisma/client';
 import { JwtPayload } from './auth.types';
+import { PermissoesService } from '../permissoes/permissoes.service';
 
 export const ROLES_KEY = 'roles';
+export const PERMS_KEY = 'perms';
 export const Roles = (...roles: Perfil[]) => SetMetadata(ROLES_KEY, roles);
+export const Require = (...perms: string[]) => SetMetadata(PERMS_KEY, perms);
 export const Public = () => SetMetadata('isPublic', true);
 
 @Injectable()
@@ -20,9 +23,10 @@ export class AuthGuard implements CanActivate {
   constructor(
     private jwt: JwtService,
     private reflector: Reflector,
+    private permissoes: PermissoesService,
   ) {}
 
-  canActivate(ctx: ExecutionContext): boolean {
+  async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const isPublic = this.reflector.getAllAndOverride<boolean>('isPublic', [
       ctx.getHandler(),
       ctx.getClass(),
@@ -39,12 +43,25 @@ export class AuthGuard implements CanActivate {
       throw new UnauthorizedException('Token inválido');
     }
 
+    if (req.user.perfil === 'master') return true;
+
     const roles = this.reflector.getAllAndOverride<Perfil[]>(ROLES_KEY, [
       ctx.getHandler(),
       ctx.getClass(),
     ]);
-    if (roles?.length && !roles.includes(req.user.perfil) && req.user.perfil !== 'master') {
+    if (roles?.length && !roles.includes(req.user.perfil)) {
       throw new ForbiddenException('Sem permissão');
+    }
+
+    const perms = this.reflector.getAllAndOverride<string[]>(PERMS_KEY, [
+      ctx.getHandler(),
+      ctx.getClass(),
+    ]);
+    if (perms?.length) {
+      const lista = await this.permissoes.listaDoUsuario(req.user.sub, req.user.perfil);
+      if (!perms.every((p) => lista.includes(p))) {
+        throw new ForbiddenException('Sem permissão para esta ação');
+      }
     }
     return true;
   }

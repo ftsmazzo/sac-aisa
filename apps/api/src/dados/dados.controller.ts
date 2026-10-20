@@ -3,7 +3,7 @@ import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { Devolucao } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
-import { Roles } from '../auth/auth.guard';
+import { Roles, Require } from '../auth/auth.guard';
 import { AuthUser } from '../auth/auth.types';
 import { AuditoriaService } from '../auditoria.service';
 import { situacao } from '../domain-bridge';
@@ -16,6 +16,7 @@ export class DadosController {
   ) {}
 
   @Roles('gestor', 'master')
+  @Require('dados.importar')
   @Post('importar-backup')
   async importar(
     @Body() body: { path?: string; data?: unknown; limpar?: boolean },
@@ -191,6 +192,7 @@ export class DadosController {
   }
 
   @Roles('gestor', 'master')
+  @Require('dados.exportar')
   @Post('exportar-backup')
   async exportar() {
     const [regs, usuarios, auditoria, depara, regras, base] = await Promise.all([

@@ -11,6 +11,8 @@ import {
   evolucaoAtivaDe,
   politicaDe,
   sinalSeguranca,
+  mesclarPermissoes,
+  temPermissao,
 } from './index';
 
 test('situacao: resolvida quando há dataAcao', () => {
@@ -87,4 +89,12 @@ test('evolução desligada reproduz a política clássica', () => {
 test('sinal de segurança usa só causas do catálogo', () => {
   assert.equal(sinalSeguranca('voltagem'), true);
   assert.equal(sinalSeguranca('prazo'), false);
+});
+
+test('permissões: override remove e master fica com tudo', () => {
+  const restrito = mesclarPermissoes('gestor', [{ chave: 'dados.importar', permitido: false }]);
+  assert.equal(temPermissao(restrito, 'dados.importar'), false);
+  assert.equal(temPermissao(restrito, 'kpis.ver'), true);
+  const master = mesclarPermissoes('master', [{ chave: 'kpis.ver', permitido: false }]);
+  assert.equal(temPermissao(master, 'kpis.ver'), true);
 });

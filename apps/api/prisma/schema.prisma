@@ -82,7 +82,42 @@ model Usuario {
   criadoPor String?
   alteradoEm DateTime @updatedAt
 
+  permissoes PermissaoUsuario[]
+
   @@map("usuarios")
+}
+
+model PermissaoUsuario {
+  id        String  @id @default(cuid())
+  usuarioId String
+  chave     String
+  permitido Boolean
+  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@unique([usuarioId, chave])
+  @@index([usuarioId])
+  @@map("permissoes_usuario")
+}
+
+enum FilaStatus {
+  pendente
+  processando
+  concluido
+  falhou
+}
+
+model FilaTarefa {
+  id         String     @id @default(cuid())
+  tipo       String
+  payload    Json?
+  status     FilaStatus @default(pendente)
+  tentativas Int        @default(0)
+  ultimoErro String?
+  criadoEm   DateTime   @default(now())
+  processadoEm DateTime?
+
+  @@index([status, tipo])
+  @@map("fila_tarefas")
 }
 
 model Produto {
