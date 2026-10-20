@@ -44,6 +44,13 @@ export function normTxt(s: string): string {
     .trim();
 }
 
+/** g-156 / G 156 / g156 → G156 (comparação). */
+export function normSku(s: string): string {
+  return String(s || '')
+    .replace(/[^a-zA-Z0-9]/g, '')
+    .toUpperCase();
+}
+
 /** Stem grosseiro PT: embalagens→embalagem, expedicoes→expedicao. */
 function stemPt(t: string): string {
   let x = normTxt(t);
@@ -195,7 +202,7 @@ export const GESTOR_TOOL_DEFS: GestorToolDef[] = [
     function: {
       name: 'reclamacoes_listar',
       description:
-        'Lista resumida de reclamações no período (máx. 15) + total no filtro. Use para listar por período/setor/causa. Kit faltando: causa=kit. Sempre passe de/ate (periodo_resolver antes).',
+        'Lista resumida de reclamações no período (máx. 15) + total. Kit: causa=kit. SKU: passe sku cru (g-156) — a tool normaliza. Sempre de/ate.',
       parameters: {
         type: 'object',
         properties: {
@@ -206,12 +213,68 @@ export const GESTOR_TOOL_DEFS: GestorToolDef[] = [
             description: 'aguardando | tratativa | resolvida (opcional)',
           },
           setor: { type: 'string', description: 'Setor responsável (fuzzy ok)' },
-          sku: { type: 'string', description: 'SKU (opcional)' },
+          sku: {
+            type: 'string',
+            description: 'SKU como o gestor escreveu (g-156, G 156). Match fuzzy automático.',
+          },
           causa: {
             type: 'string',
-            description: 'Id da causa: kit | item | voltagem | erro_envio | avaria | ... (kit = kit de montagem faltando)',
+            description: 'Id da causa: kit | item | voltagem | erro_envio | avaria | ...',
           },
           q: { type: 'string', description: 'Busca livre cliente/produto/texto (opcional)' },
+        },
+        required: ['de', 'ate'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'sku_resolver',
+      description:
+        'Resolve SKU digitado de qualquer jeito (g-156, g156, G-156) para o código canônico no cadastro/reclamações. USE SEMPRE antes de negar que um SKU não existe. Devolve candidatos e melhor match.',
+      parameters: {
+        type: 'object',
+        properties: {
+          sku: { type: 'string', description: 'Texto do SKU como o gestor falou' },
+        },
+        required: ['sku'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'sku_analise',
+      description:
+        'Análise de um SKU no período: volume de reclamações, causas, PPM se houver vendas, amostra. Use quando pedirem “como está o G-156”, “SKU g-156”. Chama resolução fuzzy internamente.',
+      parameters: {
+        type: 'object',
+        properties: {
+          sku: { type: 'string' },
+          de: { type: 'string' },
+          ate: { type: 'string' },
+        },
+        required: ['sku', 'de', 'ate'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'analise_cruzada',
+      description:
+        'Cruza KPI + top causas + setores + PPM/alertas no período e devolve insights factuais para decisão. Use para “o que precisa atenção”, “análise da semana”, “cruzar dados”. Não inventa — só sintetiza o JSON.',
+      parameters: {
+        type: 'object',
+        properties: {
+          de: { type: 'string' },
+          ate: { type: 'string' },
+          setor: { type: 'string', description: 'Opcional — restringe ao setor (fuzzy)' },
+          sku: { type: 'string', description: 'Opcional — restringe ao SKU (fuzzy)' },
         },
         required: ['de', 'ate'],
         additionalProperties: false,
@@ -389,6 +452,23 @@ export class GestorToolsService {
           if ('erro' in d) return d;
           return this.reclamacoesListar({ ...args, ...d });
         }
+        case 'sku_resolver':
+          return this.skuResolver(typeof args.sku === 'string' ? args.sku : '');
+        case 'sku_analise': {
+          const d = this.datasOuErro(args);
+          if ('erro' in d) return d;
+          return this.skuAnalise(typeof args.sku === 'string' ? args.sku : '', d.de, d.ate);
+        }
+        case 'analise_cruzada': {
+          const d = this.datasOuErro(args);
+          if ('erro' in d) return d;
+          return this.analiseCruzada(
+            d.de,
+            d.ate,
+            typeof args.setor === 'string' ? args.setor : undefined,
+            typeof args.sku === 'string' ? args.sku : undefined,
+          );
+        }
         case 'reclamacao_status':
           return this.reclamacaoStatus(typeof args.token === 'string' ? args.token : '');
         case 'kpi_resumo': {
@@ -431,13 +511,209 @@ export class GestorToolsService {
     return {
       escopo: 'Assistente do gestor SAC AISA — conversa natural, somente leitura',
       cobre: [
-        'Reclamações por período (hoje, semana, 15/30 dias)',
-        'Status de um registro ou protocolo',
-        'Resumo (volumes, tempo, meta), causas, setores, PPM, alertas',
-        'Pontos de atenção / o que está crítico',
+        'Reclamações por período / setor / causa / SKU (fuzzy: g-156 = G-156)',
+        'Status de registro/protocolo',
+        'KPI, causas, setores, PPM, alertas, análise cruzada',
+        'Pontos de atenção e decisão',
       ],
       nao_cobre: ['Alterar reclamação', 'Fluxo de cliente', 'Promessas financeiras'],
-      tom: 'Responda em prosa; não cite menus nem palavras-comando.',
+      tom: 'Resposta WhatsApp: bullets com • , negrito só com *texto*, sem ## nem **.',
+    };
+  }
+
+  private async skuResolver(raw: string) {
+    const input = String(raw || '').trim();
+    if (!input) return { erro: 'Informe o SKU' };
+    const needle = normSku(input);
+    if (!needle) return { erro: 'SKU inválido', input };
+
+    // Depara oficial
+    const depara = await this.prisma.skuDepara.findMany({ take: 500 });
+    for (const d of depara) {
+      if (normSku(d.skuOrigem) === needle || normSku(d.skuDestino) === needle) {
+        const dest = d.skuDestino;
+        const prod = await this.prisma.produto.findFirst({
+          where: { cod: { equals: dest, mode: 'insensitive' } },
+        });
+        return {
+          input,
+          encontrado: true,
+          melhor: { sku: dest, produto: prod?.produto || '', via: 'depara' },
+          candidatos: [{ sku: dest, produto: prod?.produto || '', score: 100 }],
+        };
+      }
+    }
+
+    const produtos = await this.prisma.produto.findMany({
+      where: { status: 'ATIVO' },
+      select: { cod: true, produto: true },
+      take: 3000,
+    });
+    const candProd = produtos
+      .map((p) => {
+        const n = normSku(p.cod);
+        let score = 0;
+        if (n === needle) score = 100;
+        else if (n.startsWith(needle) || needle.startsWith(n)) score = 80;
+        else if (n.includes(needle) || needle.includes(n)) score = 60;
+        return { sku: p.cod, produto: p.produto, score };
+      })
+      .filter((c) => c.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8);
+
+    // Também busca em SKUs que já apareceram em reclamações
+    const recent = await this.prisma.reclamacao.findMany({
+      select: { sku: true, produto: true },
+      orderBy: { data: 'desc' },
+      take: 800,
+    });
+    const seen = new Map<string, string>();
+    for (const r of recent) {
+      const k = normSku(r.sku);
+      if (!k || seen.has(k)) continue;
+      seen.set(k, r.sku);
+      if (candProd.some((c) => normSku(c.sku) === k)) continue;
+      let score = 0;
+      if (k === needle) score = 95;
+      else if (k.startsWith(needle) || needle.startsWith(k)) score = 75;
+      else if (k.includes(needle) || needle.includes(k)) score = 55;
+      if (score > 0) {
+        candProd.push({ sku: r.sku, produto: r.produto || '', score });
+      }
+    }
+    candProd.sort((a, b) => b.score - a.score);
+    const uniq: { sku: string; produto: string; score: number }[] = [];
+    const used = new Set<string>();
+    for (const c of candProd) {
+      const k = normSku(c.sku);
+      if (used.has(k)) continue;
+      used.add(k);
+      uniq.push(c);
+      if (uniq.length >= 8) break;
+    }
+
+    if (!uniq.length) {
+      return {
+        input,
+        encontrado: false,
+        mensagem: `Nenhum SKU parecido com "${input}" (normalizado ${needle}). Não diga que o produto não existe sem sugerir verificação no cadastro.`,
+        candidatos: [],
+      };
+    }
+    return {
+      input,
+      encontrado: true,
+      melhor: { sku: uniq[0].sku, produto: uniq[0].produto, via: 'fuzzy' },
+      candidatos: uniq,
+    };
+  }
+
+  private async skuAnalise(raw: string, de: string, ate: string) {
+    const resolved = await this.skuResolver(raw);
+    if (!resolved.encontrado || !('melhor' in resolved) || !resolved.melhor) {
+      return resolved;
+    }
+    const sku = resolved.melhor.sku;
+    const lista = await this.reclamacoesListar({ de, ate, sku });
+    const painel = await this.qualidade.painel({ de, ate });
+    const porSku = (
+      painel as {
+        porSku?: {
+          sku: string;
+          reclamacoes: number;
+          vendas: number;
+          ppm: number | null;
+          acimaLimite: boolean;
+        }[];
+      }
+    ).porSku;
+    const g = (porSku || []).find((x) => normSku(x.sku) === normSku(sku));
+
+    const itens = (lista as { itens?: { causa?: string }[]; total?: number }).itens || [];
+    const porCausa = new Map<string, number>();
+    for (const i of itens) {
+      const c = i.causa || '(sem causa)';
+      porCausa.set(c, (porCausa.get(c) || 0) + 1);
+    }
+
+    return {
+      de,
+      ate,
+      input: raw,
+      sku_canonico: sku,
+      produto: resolved.melhor.produto,
+      total_reclamacoes: (lista as { total?: number }).total ?? itens.length,
+      causas: [...porCausa.entries()].map(([nome, n]) => ({ nome, n })).sort((a, b) => b.n - a.n),
+      ppm: g
+        ? { reclamacoes: g.reclamacoes, vendas: g.vendas, ppm: g.ppm, acimaLimite: g.acimaLimite }
+        : null,
+      amostra: itens.slice(0, 10),
+      insight:
+        ((lista as { total?: number }).total || 0) === 0
+          ? `SKU ${sku} sem reclamações no período ${de}→${ate}.`
+          : `SKU ${sku}: ${(lista as { total?: number }).total} reclamação(ões) no período. Top causa: ${[...porCausa.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || '—'}.`,
+    };
+  }
+
+  private async analiseCruzada(de: string, ate: string, setor?: string, sku?: string) {
+    let skuCanon: string | undefined;
+    if (sku) {
+      const r = await this.skuResolver(sku);
+      if (r.encontrado && 'melhor' in r && r.melhor) skuCanon = r.melhor.sku;
+    }
+    const [kpis, pontos, lista] = await Promise.all([
+      this.reclamacoes.kpis({
+        de,
+        ate,
+        ...(skuCanon ? { sku: skuCanon } : {}),
+        ...(setor ? { resp: setor } : {}),
+      }),
+      this.pontosAtencao(de, ate),
+      this.reclamacoesListar({
+        de,
+        ate,
+        ...(skuCanon ? { sku: skuCanon } : {}),
+        ...(setor ? { setor } : {}),
+      }),
+    ]);
+
+    // Se setor fuzzy zerou kpis por match exato, usa ranking fuzzy
+    let setorInfo: unknown = null;
+    if (setor) {
+      setorInfo = await this.setorResumo(de, ate, setor);
+    }
+
+    const tot = kpis.totais;
+    const topCausas = (kpis.porCausa || []).slice(0, 5);
+    const topSetores = (kpis.direcionamento || []).slice(0, 5);
+    const insights: string[] = [];
+    if (tot.n === 0) {
+      insights.push('Sem reclamações no recorte — confirme período/SKU/setor antes de concluir ausência.');
+    } else {
+      if (tot.aguardando > 0) insights.push(`${tot.aguardando} aguardando produto — risco de fila.`);
+      if (tot.pctMeta != null && tot.pctMeta < 70)
+        insights.push(`Só ${tot.pctMeta}% na meta de prazo — tratativa lenta.`);
+      if (tot.pctRecorrentes >= 15) insights.push(`Recorrência alta (${tot.pctRecorrentes}%) — padrão repetindo.`);
+      if (topCausas[0]) insights.push(`Causa dominante: ${topCausas[0].k} (${topCausas[0].n}).`);
+      if (topSetores[0]) insights.push(`Setor com mais volume: ${topSetores[0].k} (${topSetores[0].n}).`);
+      const ppm = (pontos as { ppm?: { skusAcima?: number; geral?: number | null; limite?: number } }).ppm;
+      if (ppm && (ppm.skusAcima || 0) > 0)
+        insights.push(`${ppm.skusAcima} SKU(s) acima do limite PPM (${ppm.limite}).`);
+    }
+
+    return {
+      de,
+      ate,
+      filtros: { setor: setor || null, sku: skuCanon || sku || null },
+      kpi: tot,
+      top_causas: topCausas.map((g) => ({ nome: g.k, n: g.n, custo: g.custo })),
+      top_setores: topSetores.map((g) => ({ nome: g.k, n: g.n })),
+      setor_detalhe: setorInfo,
+      alertas_abertos: (pontos as { alertas_abertos?: number }).alertas_abertos,
+      ppm: (pontos as { ppm?: unknown }).ppm,
+      amostra: (lista as { itens?: unknown[] }).itens?.slice(0, 8) || [],
+      insights,
     };
   }
 
@@ -446,41 +722,58 @@ export class GestorToolsService {
     const ate = String(args.ate);
     const causaId =
       typeof args.causa === 'string' && args.causa.trim() ? args.causa.trim().toLowerCase() : '';
-    // Alias comuns do gestor
     const causaNorm =
       causaId === 'kits' || causaId === 'kit_montagem' || causaId === 'faltando_kit' ? 'kit' : causaId;
 
-    const query: Record<string, string | undefined> = {
+    let skuCanon: string | undefined;
+    let skuInput: string | undefined;
+    if (typeof args.sku === 'string' && args.sku.trim()) {
+      skuInput = args.sku.trim();
+      const resolved = await this.skuResolver(skuInput);
+      if (resolved.encontrado && 'melhor' in resolved && resolved.melhor) {
+        skuCanon = resolved.melhor.sku;
+      }
+    }
+
+    const baseQuery: Record<string, string | undefined> = {
       de,
       ate,
       limit: '200',
       ordem: 'data_desc',
     };
-    if (args.status) query.status = String(args.status);
-    if (args.sku) query.sku = String(args.sku);
-    if (args.q) query.q = String(args.q);
-    if (causaNorm) query.causa = causaNorm;
-    if (args.setor) query.resp = String(args.setor);
+    if (args.status) baseQuery.status = String(args.status);
+    if (args.q) baseQuery.q = String(args.q);
+    if (causaNorm) baseQuery.causa = causaNorm;
 
-    let rows = await this.reclamacoes.list(query);
-    // Match de setor é exato no list(); se veio setor, sempre reforça com fuzzy
-    if (args.setor) {
-      const all = await this.reclamacoes.list({
-        de,
-        ate,
-        limit: '200',
-        ordem: 'data_desc',
-        ...(causaNorm ? { causa: causaNorm } : {}),
-        ...(args.q ? { q: String(args.q) } : {}),
-        ...(args.status ? { status: String(args.status) } : {}),
+    let rows = await this.reclamacoes.list({
+      ...baseQuery,
+      ...(skuCanon ? { sku: skuCanon } : {}),
+    });
+
+    // Fuzzy SKU se equals falhou (cadastro com hífen/espaço diferente)
+    if (skuInput && rows.length === 0) {
+      const all = await this.reclamacoes.list({ ...baseQuery });
+      const needle = normSku(skuInput);
+      rows = all.filter((r) => {
+        const n = normSku(r.sku);
+        return n === needle || n.includes(needle) || needle.includes(n);
       });
+    } else if (skuInput && skuCanon) {
+      // reforça: mesma família normalizada
+      const needle = normSku(skuCanon);
+      rows = rows.filter((r) => normSku(r.sku) === needle || normSku(r.sku).includes(needle));
+    }
+
+    if (args.setor) {
       const needle = String(args.setor);
-      rows = all.filter((r) =>
+      if (!rows.length) {
+        rows = await this.reclamacoes.list({ ...baseQuery, ...(skuCanon ? { sku: skuCanon } : {}) });
+      }
+      rows = rows.filter((r) =>
         setorFuzzyMatch(String((r as { setorResp?: string }).setorResp || ''), needle),
       );
     }
 
-    // Se pediu kit e veio vazio por causaId, reforça busca textual
     if (causaNorm === 'kit' && rows.length === 0) {
       rows = await this.reclamacoes.list({
         de,
@@ -488,9 +781,10 @@ export class GestorToolsService {
         limit: '200',
         ordem: 'data_desc',
         q: 'kit',
+        ...(skuCanon ? { sku: skuCanon } : {}),
       });
       rows = rows.filter((r) => {
-        const c = String((r as { causa?: { id?: string; nome?: string } }).causa?.id || causaDe(r).id);
+        const c = String((r as { causa?: { id?: string } }).causa?.id || causaDe(r).id);
         const nome = String((r as { causa?: { nome?: string } }).causa?.nome || '');
         const txt = `${r.reclamacao || ''} ${r.laudo || ''} ${nome}`.toLowerCase();
         return c === 'kit' || /kit/.test(txt);
@@ -524,6 +818,8 @@ export class GestorToolsService {
       de,
       ate,
       filtro_causa: causaNorm || null,
+      sku_input: skuInput || null,
+      sku_canonico: skuCanon || null,
       total,
       total_retornado: itens.length,
       truncado: total > itens.length,
