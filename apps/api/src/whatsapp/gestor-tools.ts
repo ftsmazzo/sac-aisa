@@ -63,7 +63,7 @@ export const GESTOR_TOOL_DEFS: GestorToolDef[] = [
     function: {
       name: 'catalogo',
       description:
-        'Use para saber o que este assistente cobre. Não devolve cifra nem lista de reclamações. Sem parâmetros. Prefira esta tool quando o gestor perguntar “o que você faz” ou “ajuda”.',
+        'Use quando o gestor perguntar o que você faz / o que cobre. Não devolve cifra. Explique em prosa na resposta final — sem listar comandos ou menus. Sem parâmetros.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
     },
   },
@@ -317,15 +317,15 @@ export class GestorToolsService {
 
   private catalogo() {
     return {
-      escopo: 'Assistente do gestor SAC AISA — somente leitura',
+      escopo: 'Assistente do gestor SAC AISA — conversa natural, somente leitura',
       cobre: [
-        'Listar reclamações por período (hoje, semana, 15/30 dias)',
-        'Status de um registro/protocolo',
-        'KPI, causas, setores, PPM, alertas',
-        'Pontos de atenção (síntese de riscos)',
+        'Reclamações por período (hoje, semana, 15/30 dias)',
+        'Status de um registro ou protocolo',
+        'Resumo (volumes, tempo, meta), causas, setores, PPM, alertas',
+        'Pontos de atenção / o que está crítico',
       ],
-      nao_cobre: ['Alterar reclamação', 'Abrir rascunho de cliente', 'Promessas financeiras'],
-      atalhos: ['MENU', 'KPI', 'CAUSAS', 'SETOR', 'PPM', 'ALERTAS'],
+      nao_cobre: ['Alterar reclamação', 'Fluxo de cliente', 'Promessas financeiras'],
+      tom: 'Responda em prosa; não cite menus nem palavras-comando.',
     };
   }
 
