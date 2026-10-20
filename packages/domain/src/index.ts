@@ -424,6 +424,19 @@ export function empresaDeCat(c?: string | null) {
   return '';
 }
 
+/** Igual ao HTML legado: "5" → "SETOR 05", "4.1" → "SETOR 04.1". */
+export function setorLabel(s?: string | null) {
+  const raw = clean(s);
+  if (!raw) return '';
+  if (/^SETOR\b/i.test(raw)) return raw.toUpperCase().replace(/^SETOR\s+/i, 'SETOR ');
+  const [a, ...b] = raw.split('.');
+  return (
+    'SETOR ' +
+    (/^\d+$/.test(a) ? a.padStart(2, '0') : a) +
+    (b.length ? '.' + b.join('.') : '')
+  );
+}
+
 export const CATS: Record<string, string> = {
   P: 'PRODUTO AISA',
   R: 'PRODUTO ARAUCA',

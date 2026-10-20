@@ -30,6 +30,7 @@ import { AdminController } from './admin/admin.controller';
 import { BackupService } from './admin/backup.service';
 import { RedisService } from './infra/redis.service';
 import { FilaService } from './infra/fila.service';
+import { ProdutoLookupService } from './produtos/produto-lookup.service';
 import { Controller, Get } from '@nestjs/common';
 import { Public } from './auth/auth.guard';
 
@@ -100,6 +101,7 @@ class HealthController {
     BackupService,
     RedisService,
     FilaService,
+    ProdutoLookupService,
     { provide: APP_GUARD, useClass: AuthGuard },
   ],
 })

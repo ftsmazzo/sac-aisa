@@ -6,6 +6,7 @@ import { situacao, DEV_LABEL, devDe, comandoRetorno } from '../domain-bridge';
 import { PoliticaService } from '../evolucao/politica.service';
 import { AuditoriaService } from '../auditoria.service';
 import { GestorAgentService } from './gestor-agent.service';
+import { ProdutoLookupService } from '../produtos/produto-lookup.service';
 
 type Ctx = {
   passo?: string;
@@ -32,6 +33,7 @@ export class WhatsappService {
     private auditoria: AuditoriaService,
     private politica: PoliticaService,
     private gestorAgent: GestorAgentService,
+    private produtos: ProdutoLookupService,
   ) {}
 
   async handleWebhook(payload: unknown) {
@@ -384,14 +386,24 @@ export class WhatsappService {
       const max = await this.prisma.reclamacao.aggregate({ _max: { reg: true } });
       const reg = (max._max.reg || 0) + 1;
       const hoje = new Date().toISOString().slice(0, 10);
+      const cadastro = await this.produtos.completarCampos({
+        sku: ctx.sku || '',
+        produto: ctx.produto || ctx.sku || '',
+        setor: '',
+        familia: '',
+        empresa: '',
+      });
       const created = await this.prisma.reclamacao.create({
         data: {
           reg,
           data: hoje,
           cliente: ctx.nome || '',
           canal: ctx.canal || 'WHATSAPP',
-          sku: ctx.sku || '',
-          produto: ctx.produto || ctx.sku || '',
+          sku: String(cadastro.sku || ''),
+          produto: String(cadastro.produto || ctx.sku || ''),
+          setor: String(cadastro.setor || ''),
+          familia: String(cadastro.familia || ''),
+          empresa: String(cadastro.empresa || ''),
           uf: ctx.uf || '',
           reclamacao: ctx.relato || '',
           causaId: classif.causaId,
