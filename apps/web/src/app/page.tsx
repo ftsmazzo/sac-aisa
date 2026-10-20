@@ -714,10 +714,34 @@ export default function HomePage() {
   useEffect(() => {
     if (tab !== 'decisoes') return;
     const ac = new AbortController();
-    const q = filtros.resp ? `?resp=${encodeURIComponent(filtros.resp)}` : '';
-    api<{ ativa: boolean; cartoes: CartaoDecisao[] }>(`/evolucao/decisoes${q}`, { signal: ac.signal })
-      .then((r) => {
-        if (!ac.signal.aborted) setDecisoes(r.cartoes);
+    const resp = filtros.resp ? `&resp=${encodeURIComponent(filtros.resp)}` : '';
+    Promise.all([
+      api<Rec[]>(`/reclamacoes?status=aguardando&limit=500${resp}`, { signal: ac.signal }),
+      api<Rec[]>(`/reclamacoes?status=tratativa&limit=500${resp}`, { signal: ac.signal }),
+    ])
+      .then(([aguardando, tratativa]) => {
+        if (ac.signal.aborted) return;
+        const rows = [...aguardando, ...tratativa].filter(
+          (r) => !filtros.resp || r.setorResp === filtros.resp,
+        );
+        rows.sort((a, b) => (b.reg || 0) - (a.reg || 0));
+        setDecisoes(
+          rows.map((r) => ({
+            id: r.id,
+            tipo:
+              r.devolucao === 'RECEBIDO'
+                ? 'revisao'
+                : r.situacao === 'aguardando'
+                  ? 'aguardando'
+                  : 'ativa',
+            setorResp: r.setorResp || '',
+            titulo: `#${r.reg} · ${r.sku || 'sem SKU'}${r.produto ? ` — ${r.produto}` : ''}`,
+            fato: `${r.cliente || 'cliente'}${r.setor ? ` · fab. ${r.setor}` : ''}${r.causa?.nome ? ` · ${r.causa.nome}` : ''}. ${(r.reclamacao || '').slice(0, 180)}`,
+            acaoSugerida: r.causa?.acao || r.acoes?.[0]?.acao || 'Abrir a ficha e tratar.',
+            reclamacaoId: r.id,
+            sku: r.sku,
+          })),
+        );
       })
       .catch((e) => {
         if (e?.name !== 'AbortError') setMsg(e.message);
@@ -1241,55 +1265,6 @@ export default function HomePage() {
         <span className="titulo">SAC</span>
         <span className="muted">Lista paginada · Redis · Admin</span>
         <span className="spacer" />
-        {can('evolucao.ligar') ? (
-          evolucao?.ativa ? (
-            <button
-              className="small retorno"
-              onClick={async () => {
-                if (
-                  !window.confirm(
-                    'Voltar ao SAC clássico? A fila Decidir hoje some. Conversas presas no fluxo novo reiniciam no menu. VOLTAR no WhatsApp continua valendo.',
-                  )
-                ) {
-                  return;
-                }
-                try {
-                  const r = await api<EvolucaoEstado>('/evolucao/voltar', { method: 'POST' });
-                  setEvolucao(r);
-                  setDecisoes([]);
-                  setTab('kpis');
-                  setMsg('Ponto de partida restaurado.');
-                } catch (e) {
-                  setMsg(e instanceof Error ? e.message : 'Não foi possível voltar');
-                }
-              }}
-            >
-              Voltar ao ponto de partida
-            </button>
-          ) : (
-            <button
-              className="small"
-              onClick={async () => {
-                if (
-                  !window.confirm(
-                    'Ligar a fila Decidir hoje, os casos parecidos na ficha e a faixa de segurança na Qualidade? O SAC clássico continua sendo o ponto de partida. Dá para voltar.',
-                  )
-                ) {
-                  return;
-                }
-                try {
-                  const r = await api<EvolucaoEstado>('/evolucao/ligar', { method: 'POST' });
-                  setEvolucao(r);
-                  setMsg('Evolução ligada. No WhatsApp, VOLTAR reinicia o atendimento.');
-                } catch (e) {
-                  setMsg(e instanceof Error ? e.message : 'Não foi possível ligar');
-                }
-              }}
-            >
-              Ligar decisões do setor
-            </button>
-          )
-        ) : null}
         <span>
           <b>{user.nome}</b> · {user.perfil}
         </span>
@@ -1464,24 +1439,6 @@ export default function HomePage() {
                 </button>
               </div>
             ) : null}
-          </div>
-        ) : null}
-        {user.perfil === 'master' && evolucao && !evolucao.ativa ? (
-          <div className="card">
-            <h3>Este é o ponto de partida</h3>
-            <p>
-              Reclamação, causa, custo e situação estão como sempre. O botão{' '}
-              <b>Ligar decisões do setor</b> abre a aba Decidir hoje, mostra na ficha até três casos
-              parecidos do mesmo SKU e causa, e separa na Qualidade o sinal de risco à pessoa. No
-              WhatsApp, <b>VOLTAR</b> já devolve o cliente ao menu. Se sair do combinado,{' '}
-              <b>Voltar ao ponto de partida</b> desliga tudo isso.
-            </p>
-            {evolucao.webhookConfigurado ? null : (
-              <p className="muted">
-                O segredo do webhook não está na API. A fila liga mesmo assim. A conferência de SKU no
-                WhatsApp entra junto; o webhook só exige segredo se a variável estiver definida.
-              </p>
-            )}
           </div>
         ) : null}
         {msg ? (
@@ -1915,8 +1872,8 @@ export default function HomePage() {
         {tab === 'decisoes' ? (
           <>
             <p className="kpi-insight">
-              Um cartão por reclamação ainda aberta (sem data de ação). As que já chegaram ficam como revisão na chegada.
-              {filtros.resp ? ` Filtro: ${filtros.resp}.` : ' Use o filtro Resolve para ver um setor.'}
+              Reclamações ainda abertas. {decisoes.length} cartão(ões).
+              {filtros.resp ? ` Filtro: ${filtros.resp}.` : ''}
             </p>
             {decisoes.map((d) => (
               <div className="card" key={d.id}>
@@ -1967,7 +1924,9 @@ export default function HomePage() {
                 </div>
               </div>
             ))}
-            {!decisoes.length ? <div className="card muted">Nenhuma decisão aberta neste filtro.</div> : null}
+            {!decisoes.length ? (
+              <div className="card muted">Nenhuma reclamação aberta. As resolvidas ficam só na aba Reclamações.</div>
+            ) : null}
           </>
         ) : null}
 
