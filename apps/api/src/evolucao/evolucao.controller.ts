@@ -13,12 +13,14 @@ export class EvolucaoController {
   }
 
   @Roles('master')
+  @Require('evolucao.ligar')
   @Post('ligar')
   ligar(@Req() req: { user: AuthUser }) {
     return this.evolucao.ligar(req.user);
   }
 
   @Roles('master')
+  @Require('evolucao.ligar')
   @Post('voltar')
   voltar(@Req() req: { user: AuthUser }) {
     return this.evolucao.voltar(req.user);
