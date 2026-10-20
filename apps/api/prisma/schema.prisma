@@ -208,6 +208,7 @@ model Reclamacao {
   alteradoPor      String?
 
   fotos   ReclamacaoFoto[]
+  causas  ReclamacaoCausa[]
   alertas Alerta[]
 
   @@index([situacao])
@@ -215,6 +216,21 @@ model Reclamacao {
   @@index([empresa])
   @@index([canal])
   @@map("reclamacoes")
+}
+
+/** Motivos adicionais (além de causaId principal). Até 5 por reclamação. */
+model ReclamacaoCausa {
+  id           String  @id @default(cuid())
+  reclamacaoId String
+  causaId      String
+  primaria     Boolean @default(false)
+  ordem        Int     @default(0)
+
+  reclamacao Reclamacao @relation(fields: [reclamacaoId], references: [id], onDelete: Cascade)
+
+  @@unique([reclamacaoId, causaId])
+  @@index([causaId])
+  @@map("reclamacao_causas")
 }
 
 model ReclamacaoFoto {

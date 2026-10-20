@@ -40,7 +40,9 @@ export class BackupService {
       this.prisma.produto.findMany(),
       this.prisma.causa.findMany(),
       this.prisma.regraDirecionamento.findMany(),
-      this.prisma.reclamacao.findMany({ include: { fotos: true } }),
+      this.prisma.reclamacao.findMany({
+        include: { fotos: true, causas: { orderBy: { ordem: 'asc' } } },
+      }),
       this.prisma.auditoria.findMany({ orderBy: { ts: 'desc' }, take: 5000 }),
       this.prisma.config.findMany(),
       this.prisma.alerta.findMany(),
