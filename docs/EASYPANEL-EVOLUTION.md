@@ -85,3 +85,22 @@ Gestores podem receber todos os alertas com `perfil: "gestor"` e `setor: ""`.
 - `NOVA` — abre rascunho de reclamação
 - `STATUS 402` — consulta situação (respeita devolução/tratativa)
 - `ATENDENTE` — handoff humano
+
+## 7. Assistente do gestor (WhatsApp)
+
+Allowlist (qualquer um basta):
+
+1. Variável `GESTOR_WHATSAPP_TELEFONES` (lista separada por vírgula)
+2. Usuário ativo com perfil `master` ou `gestor` e telefone cadastrado
+3. Destino de alerta com `perfil` contendo `gestor` ou `master`
+
+Comandos (somente leitura, últimos 30 dias):
+
+- `MENU` — ajuda
+- `KPI` — totais, tempo médio, meta
+- `CAUSAS` — principais motivos
+- `SETOR` / `SETOR Embalagem` — por setor responsável
+- `PPM` — qualidade / SKUs críticos
+- `ALERTAS` — alertas abertos
+
+Números na allowlist **não** entram no fluxo de cliente (`NOVA` / `STATUS`).
